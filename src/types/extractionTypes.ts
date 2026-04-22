@@ -42,6 +42,38 @@ export type GsproVisibility = {
   enrichmentRecommended?: boolean;
 };
 
+export type ResolvedShotFieldSource = "gspro" | "ogc" | "derived" | "missing";
+
+export type ResolvedPracticeShot = {
+  club?: string;
+  carry?: number;
+  carrySource?: ResolvedShotFieldSource;
+  totalDistance?: number;
+  totalDistanceSource?: ResolvedShotFieldSource;
+  spin?: number;
+  spinSource?: ResolvedShotFieldSource;
+  spinAxis?: number;
+  spinAxisSource?: ResolvedShotFieldSource;
+  hla?: number;
+  hlaSource?: ResolvedShotFieldSource;
+  vla?: number;
+  vlaSource?: ResolvedShotFieldSource;
+  ballSpeed?: number;
+  ballSpeedSource?: ResolvedShotFieldSource;
+  peakHeight?: number;
+  peakHeightSource?: ResolvedShotFieldSource;
+  offline?: number;
+  offlineSource?: ResolvedShotFieldSource;
+  enrichmentRecommended?: boolean;
+};
+
+export type OgcEligibility = {
+  callable: boolean;
+  recommended: boolean;
+  presentFields: string[];
+  missingFields: string[];
+};
+
 export type PracticeState = {
   club?: string;
   tiles: TileValue[];
@@ -54,6 +86,8 @@ export type PracticeState = {
   };
   gsproFields?: GsproPracticeFields;
   gsproVisibility?: GsproVisibility;
+  resolvedShot?: ResolvedPracticeShot;
+  ogcEligibility?: OgcEligibility;
 };
 
 export type CourseState = {
