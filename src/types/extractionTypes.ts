@@ -14,6 +14,34 @@ export type TileValue = {
   rawText?: string;
 };
 
+export type GsproPracticeFields = {
+  club?: string;
+  carryGame?: number;
+  carryRaw?: number;
+  totalDistance?: number;
+  spin?: number;
+  spinAxis?: number;
+  hla?: number;
+  vla?: number;
+  ballSpeed?: number;
+  peakHeight?: number;
+  offline?: number;
+  clubPath?: number;
+  clubAoa?: number;
+  faceToTarget?: number;
+  faceToPath?: number;
+  backSpin?: number;
+  sideSpin?: number;
+  clubSpeed?: number;
+};
+
+export type GsproVisibility = {
+  visibleFields: string[];
+  missingVisibleFields: string[];
+  completenessScore?: number;
+  enrichmentRecommended?: boolean;
+};
+
 export type PracticeState = {
   club?: string;
   tiles: TileValue[];
@@ -24,6 +52,8 @@ export type PracticeState = {
     missingRequiredFields?: string[];
     missingRecommendedFields?: string[];
   };
+  gsproFields?: GsproPracticeFields;
+  gsproVisibility?: GsproVisibility;
 };
 
 export type CourseState = {
