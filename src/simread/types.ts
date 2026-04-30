@@ -16,7 +16,7 @@ export type FrameListener = (frame: ExtractedFrame) => void;
 
 export type SimRead = {
   start: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
   extractOnce: () => Promise<ExtractedFrame>;
   onFrame: (callback: FrameListener) => () => void;
 };

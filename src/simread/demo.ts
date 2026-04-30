@@ -37,10 +37,10 @@ async function main() {
     await sleep(1700);
 
     console.log("[simread:demo] stop()");
-    simRead.stop();
+    await simRead.stop();
   } finally {
     unsubscribe();
-    simRead.stop();
+    await simRead.stop();
   }
 }
 

@@ -8,7 +8,7 @@ export type CreateSimReadOptions = {
 };
 
 export const createSimRead = (options: CreateSimReadOptions = {}): SimRead => {
-  const provider = options.provider ?? new MockCaptureProvider();
+  const provider: CaptureProvider = options.provider ?? new MockCaptureProvider();
   const intervalMs = options.intervalMs ?? 1000;
   const listeners = new Set<FrameListener>();
   let timer: NodeJS.Timeout | null = null;
@@ -44,6 +44,7 @@ export const createSimRead = (options: CreateSimReadOptions = {}): SimRead => {
       return;
     }
 
+    await provider.start?.();
     isRunning = true;
     await loopOnce();
     timer = setInterval(() => {
@@ -51,12 +52,14 @@ export const createSimRead = (options: CreateSimReadOptions = {}): SimRead => {
     }, intervalMs);
   };
 
-  const stop = () => {
+  const stop = async () => {
     isRunning = false;
     if (timer) {
       clearInterval(timer);
       timer = null;
     }
+
+    await provider.stop?.();
   };
 
   const onFrame = (callback: FrameListener) => {
