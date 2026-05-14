@@ -1,13 +1,18 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
+import { HttpVisionProvider } from "../../vision/providers/httpVisionProvider";
 import type { ExtractedFrame } from "../types";
 import type { CaptureProvider, WindowInfo } from "./CaptureProvider";
 
 const UNSUPPORTED_PLATFORM_MESSAGE =
   "WindowsCaptureProvider is only supported on Windows (process.platform === \"win32\").";
 
-const NOT_IMPLEMENTED_MESSAGE =
-  "WindowsCaptureProvider capture is not implemented yet. Future work will capture the selected window on Windows.";
+const SELECTED_WINDOW_REQUIRED_MESSAGE =
+  "WindowsCaptureProvider requires a selected window before capture";
 
 const execFileAsync = promisify(execFile);
 
@@ -121,6 +126,89 @@ $callback = [SimReadNativeWindows+EnumWindowsProc]{
 $windows | Sort-Object processName, title | ConvertTo-Json -Depth 3
 `;
 
+const CAPTURE_VISIBLE_WINDOW_SCRIPT = String.raw`
+$ErrorActionPreference = "Stop"
+
+$hwndValue = [Int64] $env:SIMREAD_CAPTURE_HWND
+$outputPath = [string] $env:SIMREAD_CAPTURE_PATH
+
+Add-Type -AssemblyName System.Drawing
+
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class SimReadCaptureNativeWindows {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct RECT {
+    public int Left;
+    public int Top;
+    public int Right;
+    public int Bottom;
+  }
+
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDPIAware();
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsWindowVisible(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool IsIconic(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+}
+"@
+
+[void] [SimReadCaptureNativeWindows]::SetProcessDPIAware()
+
+$hWnd = [IntPtr]::new($hwndValue)
+if (-not [SimReadCaptureNativeWindows]::IsWindow($hWnd)) {
+  throw "Selected hwnd is no longer a valid window: $hwndValue"
+}
+
+if (-not [SimReadCaptureNativeWindows]::IsWindowVisible($hWnd)) {
+  throw "Selected hwnd is not visible: $hwndValue"
+}
+
+if ([SimReadCaptureNativeWindows]::IsIconic($hWnd)) {
+  throw "Selected hwnd is minimized: $hwndValue"
+}
+
+$rect = New-Object SimReadCaptureNativeWindows+RECT
+if (-not [SimReadCaptureNativeWindows]::GetWindowRect($hWnd, [ref] $rect)) {
+  throw "Could not read window bounds for hwnd: $hwndValue"
+}
+
+$width = $rect.Right - $rect.Left
+$height = $rect.Bottom - $rect.Top
+if ($width -le 0 -or $height -le 0) {
+  throw "Selected hwnd has invalid bounds: width=$width height=$height"
+}
+
+$bitmap = New-Object System.Drawing.Bitmap $width, $height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+
+try {
+  $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+  $bitmap.Save($outputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+} finally {
+  $graphics.Dispose()
+  $bitmap.Dispose()
+}
+
+[pscustomobject]@{
+  outputPath = $outputPath
+  hwnd = $hwndValue
+  width = $width
+  height = $height
+} | ConvertTo-Json -Depth 2
+`;
+
 type NativeWindowInfo = {
   hwnd: number;
   title: string;
@@ -181,8 +269,25 @@ const parseWindows = (stdout: string): NativeWindowInfo[] => {
   });
 };
 
+const parseHwndWindowId = (windowId: string): string => {
+  const match = /^hwnd:(\d+)$/.exec(windowId);
+  if (!match?.[1]) {
+    throw new Error(`Windows capture failure: invalid selected window id: ${windowId}`);
+  }
+
+  return match[1];
+};
+
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 export class WindowsCaptureProvider implements CaptureProvider {
   private selectedWindowId: string | undefined;
+  private readonly visionProvider: HttpVisionProvider;
+
+  constructor() {
+    this.visionProvider = new HttpVisionProvider();
+  }
 
   async start(): Promise<void> {
     if (process.platform !== "win32") {
@@ -261,8 +366,55 @@ export class WindowsCaptureProvider implements CaptureProvider {
       throw new Error(UNSUPPORTED_PLATFORM_MESSAGE);
     }
 
-    // TODO: Capture the selected GSPro window and run it through the extractor.
-    void this.selectedWindowId;
-    throw new Error(NOT_IMPLEMENTED_MESSAGE);
+    if (!this.selectedWindowId) {
+      throw new Error(SELECTED_WINDOW_REQUIRED_MESSAGE);
+    }
+
+    const hwnd = parseHwndWindowId(this.selectedWindowId);
+    const capturePath = join(tmpdir(), `simread-windows-capture-${randomUUID()}.png`);
+
+    try {
+      try {
+        await execFileAsync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            CAPTURE_VISIBLE_WINDOW_SCRIPT,
+          ],
+          {
+            env: {
+              ...process.env,
+              SIMREAD_CAPTURE_HWND: hwnd,
+              SIMREAD_CAPTURE_PATH: capturePath,
+            },
+            windowsHide: true,
+          },
+        );
+      } catch (error) {
+        throw new Error(`Windows capture failure: ${getErrorMessage(error)}`);
+      }
+
+      let extractedFrame;
+      try {
+        extractedFrame = await this.visionProvider.extract(capturePath, "practice");
+      } catch (error) {
+        throw new Error(
+          `HttpVisionProvider/extraction failure: ${getErrorMessage(error)}`,
+        );
+      }
+
+      return {
+        ...extractedFrame,
+        frame: {
+          ...extractedFrame.frame,
+          source: "windows-capture",
+        },
+      };
+    } finally {
+      await rm(capturePath, { force: true }).catch(() => undefined);
+    }
   }
 }

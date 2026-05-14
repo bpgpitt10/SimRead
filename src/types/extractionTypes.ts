@@ -97,7 +97,7 @@ export type CourseState = {
 export type ExtractedFrame = {
   frame: {
     timestampMs: number;
-    source: "screenshot" | "mock";
+    source: "screenshot" | "mock" | "windows-capture";
   };
   mode: "practice" | "course";
   practice?: PracticeState;

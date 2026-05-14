@@ -8,7 +8,7 @@ export type PracticeState = BasePracticeState;
 export type ExtractedFrame = Omit<BaseExtractedFrame, "frame"> & {
   frame: {
     timestampMs: number;
-    source: "mock";
+    source: "mock" | "windows-capture";
   };
 };
 

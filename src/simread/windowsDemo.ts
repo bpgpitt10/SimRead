@@ -37,6 +37,22 @@ async function main() {
     console.log(
       `[simread:windows] selected window id: ${selection.selectedWindow?.id ?? "unknown"}`,
     );
+
+    console.log("[simread:windows] capture() starting");
+    const frame = await provider.capture();
+
+    console.log(
+      JSON.stringify(
+        {
+          frameSource: frame.frame.source,
+          visibleFields: frame.practice?.gsproVisibility?.visibleFields ?? [],
+          resolvedShot: frame.practice?.resolvedShot ?? null,
+          ogcEligibility: frame.practice?.ogcEligibility ?? null,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
 
