@@ -1,2 +1,3 @@
 images/practice/*.png
 .DS_Store
+node_modules/
