@@ -133,6 +133,23 @@ type WindowsWindowInfo = WindowInfo & {
   processId?: number;
 };
 
+type GsproSelectionResult = {
+  status: "selected" | "not_found" | "ambiguous";
+  selectedWindow?: WindowInfo;
+  candidates: WindowInfo[];
+};
+
+const includesGspro = (window: WindowInfo) => {
+  const processName =
+    "processName" in window && typeof window.processName === "string"
+      ? window.processName
+      : undefined;
+
+  return [window.title, window.appName, processName].some((value) =>
+    value?.toLowerCase().includes("gspro"),
+  );
+};
+
 const toWindowInfo = (window: NativeWindowInfo): WindowsWindowInfo => {
   const id = `hwnd:${window.hwnd}`;
   const processName = window.processName?.trim() || undefined;
@@ -209,6 +226,34 @@ export class WindowsCaptureProvider implements CaptureProvider {
     }
 
     this.selectedWindowId = selectedWindow.id;
+  }
+
+  async selectBestGsproWindow(): Promise<GsproSelectionResult> {
+    const windows = await this.listWindows();
+    const candidates = windows.filter(includesGspro);
+
+    if (candidates.length === 0) {
+      return {
+        status: "not_found",
+        candidates: [],
+      };
+    }
+
+    if (candidates.length > 1) {
+      return {
+        status: "ambiguous",
+        candidates,
+      };
+    }
+
+    const [selectedWindow] = candidates as [WindowInfo, ...WindowInfo[]];
+    await this.selectWindow(selectedWindow.id);
+
+    return {
+      status: "selected",
+      selectedWindow,
+      candidates,
+    };
   }
 
   async capture(): Promise<ExtractedFrame> {

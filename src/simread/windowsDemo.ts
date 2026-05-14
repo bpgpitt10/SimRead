@@ -16,7 +16,6 @@ const includesGsPro = (window: ListedWindow) =>
 async function main() {
   const provider = new WindowsCaptureProvider();
   const windows = (await provider.listWindows()) as ListedWindow[];
-  const gsproWindows = windows.filter(includesGsPro);
 
   console.log(`[simread:windows] visible top-level windows: ${windows.length}`);
 
@@ -30,12 +29,29 @@ async function main() {
     );
   }
 
-  if (gsproWindows.length === 0) {
-    console.log("[simread:windows] GSPro was not found in the visible window list.");
+  const selection = await provider.selectBestGsproWindow();
+
+  console.log(`[simread:windows] selectBestGsproWindow status: ${selection.status}`);
+
+  if (selection.status === "selected") {
+    console.log(
+      `[simread:windows] selected window id: ${selection.selectedWindow?.id ?? "unknown"}`,
+    );
     return;
   }
 
-  console.log(`[simread:windows] GSPro matches: ${gsproWindows.length}`);
+  if (selection.status === "ambiguous") {
+    console.log("[simread:windows] ambiguous GSPro candidates:");
+
+    for (const candidate of selection.candidates as ListedWindow[]) {
+      const appName = candidate.appName ?? candidate.processName ?? "unknown app";
+      const processId = candidate.processId ? ` pid=${candidate.processId}` : "";
+
+      console.log(
+        `[candidate] id=${candidate.id}${processId} app=${appName} title=${candidate.title}`,
+      );
+    }
+  }
 }
 
 main().catch((error) => {
