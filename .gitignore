@@ -1,3 +1,4 @@
 images/practice/*.png
+debug-captures/
 .DS_Store
 node_modules/

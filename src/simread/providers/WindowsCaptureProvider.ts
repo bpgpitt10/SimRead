@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { HttpVisionProvider } from "../../vision/providers/httpVisionProvider";
 import type { ExtractedFrame } from "../types";
@@ -281,6 +281,35 @@ const parseHwndWindowId = (windowId: string): string => {
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
+const padTimestampPart = (value: number) => value.toString().padStart(2, "0");
+
+const formatCaptureTimestamp = (date: Date) =>
+  [
+    date.getFullYear(),
+    padTimestampPart(date.getMonth() + 1),
+    padTimestampPart(date.getDate()),
+    "-",
+    padTimestampPart(date.getHours()),
+    padTimestampPart(date.getMinutes()),
+    padTimestampPart(date.getSeconds()),
+  ].join("");
+
+const saveDebugCapture = async (capturePath: string) => {
+  const debugCaptureDir = resolve("debug-captures");
+  const latestCapturePath = join(debugCaptureDir, "latest-gspro-capture.png");
+  const timestampedCapturePath = join(
+    debugCaptureDir,
+    `gspro-capture-${formatCaptureTimestamp(new Date())}.png`,
+  );
+
+  await mkdir(debugCaptureDir, { recursive: true });
+  await copyFile(capturePath, latestCapturePath);
+  await copyFile(capturePath, timestampedCapturePath);
+
+  console.log(`[simread:windows] saved capture: ${latestCapturePath}`);
+  console.log(`[simread:windows] saved capture: ${timestampedCapturePath}`);
+};
+
 export class WindowsCaptureProvider implements CaptureProvider {
   private selectedWindowId: string | undefined;
   private readonly visionProvider: HttpVisionProvider;
@@ -396,6 +425,8 @@ export class WindowsCaptureProvider implements CaptureProvider {
       } catch (error) {
         throw new Error(`Windows capture failure: ${getErrorMessage(error)}`);
       }
+
+      await saveDebugCapture(capturePath);
 
       let extractedFrame;
       try {
