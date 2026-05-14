@@ -6,12 +6,25 @@ type ListedWindow = {
   appName?: string;
   processName?: string;
   processId?: number;
+  gsproMatchStrength?: "strong app/process match" | "title fallback match";
 };
 
-const includesGsPro = (window: ListedWindow) =>
-  [window.title, window.appName, window.processName].some((value) =>
-    value?.toLowerCase().includes("gspro"),
-  );
+const equalsGspro = (value: string | undefined) => value?.toLowerCase() === "gspro";
+
+const getGsproMatchStrength = (
+  window: ListedWindow,
+): ListedWindow["gsproMatchStrength"] => {
+  if (equalsGspro(window.appName) || equalsGspro(window.processName)) {
+    return "strong app/process match";
+  }
+
+  const title = window.title.toLowerCase();
+  if (title === "gspro" || title.startsWith("gspro ") || title.startsWith("gspro -")) {
+    return "title fallback match";
+  }
+
+  return undefined;
+};
 
 async function main() {
   const provider = new WindowsCaptureProvider();
@@ -20,7 +33,8 @@ async function main() {
   console.log(`[simread:windows] visible top-level windows: ${windows.length}`);
 
   for (const window of windows) {
-    const marker = includesGsPro(window) ? "GSPro match" : "window";
+    const matchStrength = getGsproMatchStrength(window);
+    const marker = matchStrength ?? "window";
     const appName = window.appName ?? window.processName ?? "unknown app";
     const processId = window.processId ? ` pid=${window.processId}` : "";
 
@@ -36,6 +50,11 @@ async function main() {
   if (selection.status === "selected") {
     console.log(
       `[simread:windows] selected window id: ${selection.selectedWindow?.id ?? "unknown"}`,
+    );
+    console.log(
+      `[simread:windows] selected match: ${
+        selection.selectedWindow?.gsproMatchStrength ?? "unknown"
+      }`,
     );
 
     console.log("[simread:windows] capture() starting");
@@ -64,7 +83,9 @@ async function main() {
       const processId = candidate.processId ? ` pid=${candidate.processId}` : "";
 
       console.log(
-        `[candidate] id=${candidate.id}${processId} app=${appName} title=${candidate.title}`,
+        `[candidate: ${candidate.gsproMatchStrength ?? "unknown"}] id=${
+          candidate.id
+        }${processId} app=${appName} title=${candidate.title}`,
       );
     }
   }

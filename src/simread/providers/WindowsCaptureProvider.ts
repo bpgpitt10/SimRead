@@ -221,21 +221,54 @@ type WindowsWindowInfo = WindowInfo & {
   processId?: number;
 };
 
-type GsproSelectionResult = {
-  status: "selected" | "not_found" | "ambiguous";
-  selectedWindow?: WindowInfo;
-  candidates: WindowInfo[];
+type GsproMatchStrength = "strong app/process match" | "title fallback match";
+
+type GsproMatchedWindow = WindowInfo & {
+  gsproMatchStrength: GsproMatchStrength;
 };
 
-const includesGspro = (window: WindowInfo) => {
-  const processName =
-    "processName" in window && typeof window.processName === "string"
-      ? window.processName
-      : undefined;
+type GsproSelectionResult = {
+  status: "selected" | "not_found" | "ambiguous";
+  selectedWindow?: GsproMatchedWindow;
+  candidates: GsproMatchedWindow[];
+};
 
-  return [window.title, window.appName, processName].some((value) =>
-    value?.toLowerCase().includes("gspro"),
-  );
+const equalsGspro = (value: string | undefined) => value?.toLowerCase() === "gspro";
+
+const getProcessName = (window: WindowInfo) =>
+  "processName" in window && typeof window.processName === "string"
+    ? window.processName
+    : undefined;
+
+const isStrongGsproMatch = (window: WindowInfo) =>
+  equalsGspro(window.appName) || equalsGspro(getProcessName(window));
+
+const isTitleFallbackGsproMatch = (window: WindowInfo) => {
+  const title = window.title.toLowerCase();
+
+  return title === "gspro" || title.startsWith("gspro ") || title.startsWith("gspro -");
+};
+
+const toGsproMatchedWindow = (
+  window: WindowInfo,
+  gsproMatchStrength: GsproMatchStrength,
+): GsproMatchedWindow => ({
+  ...window,
+  gsproMatchStrength,
+});
+
+const findGsproCandidates = (windows: WindowInfo[]): GsproMatchedWindow[] => {
+  const strongCandidates = windows
+    .filter(isStrongGsproMatch)
+    .map((window) => toGsproMatchedWindow(window, "strong app/process match"));
+
+  if (strongCandidates.length > 0) {
+    return strongCandidates;
+  }
+
+  return windows
+    .filter(isTitleFallbackGsproMatch)
+    .map((window) => toGsproMatchedWindow(window, "title fallback match"));
 };
 
 const toWindowInfo = (window: NativeWindowInfo): WindowsWindowInfo => {
@@ -364,7 +397,7 @@ export class WindowsCaptureProvider implements CaptureProvider {
 
   async selectBestGsproWindow(): Promise<GsproSelectionResult> {
     const windows = await this.listWindows();
-    const candidates = windows.filter(includesGspro);
+    const candidates = findGsproCandidates(windows);
 
     if (candidates.length === 0) {
       return {
@@ -380,7 +413,7 @@ export class WindowsCaptureProvider implements CaptureProvider {
       };
     }
 
-    const [selectedWindow] = candidates as [WindowInfo, ...WindowInfo[]];
+    const [selectedWindow] = candidates as [GsproMatchedWindow, ...GsproMatchedWindow[]];
     await this.selectWindow(selectedWindow.id);
 
     return {
