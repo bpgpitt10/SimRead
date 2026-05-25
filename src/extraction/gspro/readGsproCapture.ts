@@ -1,5 +1,6 @@
 import { existsSync } from "fs";
 import { resolve } from "path";
+import { buildGsproPracticeFrame } from "./buildGsproPracticeFrame";
 import { detectGsproTileRegions } from "./detectGsproTileRegions";
 import { normalizeGsproTiles } from "./normalizeGsproTiles";
 import { TesseractCliTileTextReader } from "./readers/TileTextReader";
@@ -37,7 +38,39 @@ const isCliEntry = require.main === module;
 if (isCliEntry) {
   readGsproCapture(process.argv[2])
     .then((result) => {
-      console.log(JSON.stringify(result, null, 2));
+      const extractedFrame = buildGsproPracticeFrame(result);
+      console.log(
+        JSON.stringify(
+          {
+            ...result,
+            extractedFrameSummary: {
+              source: extractedFrame.frame.source,
+              mode: extractedFrame.mode,
+              provider: extractedFrame.provider,
+              overallConfidence: extractedFrame.confidence.overall,
+              tileCount: extractedFrame.practice?.tiles.length ?? 0,
+              visibleFieldCount:
+                extractedFrame.practice?.gsproVisibility?.visibleFields.length ?? 0,
+              layoutSupported:
+                extractedFrame.practice?.layoutSupport?.isSupported ?? false,
+            },
+            extractedFrame: {
+              frame: extractedFrame.frame,
+              mode: extractedFrame.mode,
+              confidence: extractedFrame.confidence,
+              provider: extractedFrame.provider,
+              practice: {
+                gsproVisibility: extractedFrame.practice?.gsproVisibility,
+                resolvedShot: extractedFrame.practice?.resolvedShot,
+                ogcEligibility: extractedFrame.practice?.ogcEligibility,
+                layoutSupport: extractedFrame.practice?.layoutSupport,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
     })
     .catch((error) => {
       console.error(error instanceof Error ? error.message : String(error));

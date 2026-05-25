@@ -18,6 +18,7 @@ export type GsproPracticeFields = {
   club?: string;
   carryGame?: number;
   carryRaw?: number;
+  carryLm?: number;
   totalDistance?: number;
   spin?: number;
   spinAxis?: number;
@@ -25,6 +26,7 @@ export type GsproPracticeFields = {
   vla?: number;
   ballSpeed?: number;
   peakHeight?: number;
+  descentAngle?: number;
   offline?: number;
   clubPath?: number;
   clubAoa?: number;
@@ -62,6 +64,8 @@ export type ResolvedPracticeShot = {
   ballSpeedSource?: ResolvedShotFieldSource;
   peakHeight?: number;
   peakHeightSource?: ResolvedShotFieldSource;
+  descentAngle?: number;
+  descentAngleSource?: ResolvedShotFieldSource;
   offline?: number;
   offlineSource?: ResolvedShotFieldSource;
   enrichmentRecommended?: boolean;
@@ -97,7 +101,7 @@ export type CourseState = {
 export type ExtractedFrame = {
   frame: {
     timestampMs: number;
-    source: "screenshot" | "mock" | "windows-capture";
+    source: "screenshot" | "mock" | "windows-capture" | "ocr-debug-capture";
   };
   mode: "practice" | "course";
   practice?: PracticeState;
