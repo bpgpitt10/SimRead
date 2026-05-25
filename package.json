@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "ts-node src/index.ts",
     "simread:demo": "ts-node src/simread/demo.ts",
+    "simread:live": "ts-node src/simread/liveDemo.ts",
     "simread:windows": "ts-node src/simread/windowsDemo.ts",
     "simread:ocr": "ts-node src/extraction/gspro/readGsproCapture.ts"
   },
