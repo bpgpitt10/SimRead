@@ -7,7 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "ts-node src/index.ts",
     "simread:demo": "ts-node src/simread/demo.ts",
-    "simread:windows": "ts-node src/simread/windowsDemo.ts"
+    "simread:windows": "ts-node src/simread/windowsDemo.ts",
+    "simread:ocr": "ts-node src/extraction/gspro/readGsproCapture.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +16,8 @@
   "type": "commonjs",
   "dependencies": {
     "@types/node": "^25.6.0",
+    "@types/pngjs": "^6.0.5",
+    "pngjs": "^7.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }
