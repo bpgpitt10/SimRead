@@ -9,7 +9,8 @@
     "simread:demo": "ts-node src/simread/demo.ts",
     "simread:live": "ts-node src/simread/liveDemo.ts",
     "simread:windows": "ts-node src/simread/windowsDemo.ts",
-    "simread:ocr": "ts-node src/extraction/gspro/readGsproCapture.ts"
+    "simread:ocr": "ts-node src/extraction/gspro/readGsproCapture.ts",
+    "simread:ocr-check": "ts-node src/extraction/gspro/readers/resolveTesseractPath.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,10 +1,12 @@
-import { spawn, spawnSync } from "child_process";
+import { spawn } from "child_process";
 import { createReadStream } from "fs";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { PNG } from "pngjs";
 import { GsproTileBounds, GsproTileText } from "../types";
+import { checkTesseractAvailability } from "./resolveTesseractPath";
+import type { ResolveTesseractPathOptions } from "./resolveTesseractPath";
 
 type LoadedPng = PNG & {
   width: number;
@@ -86,11 +88,12 @@ const meanConfidenceFromTsv = (tsv: string) => {
 };
 
 const runTesseract = (
+  executablePath: string,
   imagePath: string,
   options: string[],
 ): Promise<TesseractRead> =>
   new Promise((resolve, reject) => {
-    const child = spawn("tesseract", [imagePath, "stdout", ...options], {
+    const child = spawn(executablePath, [imagePath, "stdout", ...options], {
       windowsHide: true,
     });
     let stdout = "";
@@ -154,24 +157,19 @@ const labelBoundsForTile = (bounds: GsproTileBounds): GsproTileBounds => ({
 });
 
 export class TesseractCliTileTextReader implements TileTextReader {
+  constructor(private readonly options: ResolveTesseractPathOptions = {}) {}
+
   async readTiles(
     imagePath: string,
     bounds: GsproTileBounds[],
   ): Promise<TileTextReaderResult> {
-    const availability = spawnSync("tesseract", ["--version"], {
-      encoding: "utf8",
-      windowsHide: true,
-    });
+    const availability = checkTesseractAvailability(this.options);
 
-    if (availability.error || availability.status !== 0) {
-      return {
-        engine: "tesseract-cli",
-        ocrRan: false,
-        warnings: [
-          "Local OCR did not run because the tesseract executable was not found on PATH.",
-        ],
-        texts: bounds.map(() => ({})),
-      };
+    if (!availability.available || !availability.executablePath) {
+      throw new Error(
+        availability.message ??
+          "Local OCR unavailable: tesseract not found. Install/bundle Tesseract or set SIMREAD_TESSERACT_PATH.",
+      );
     }
 
     const source = await loadPng(imagePath);
@@ -194,15 +192,15 @@ export class TesseractCliTileTextReader implements TileTextReader {
           cropPng(source, clampBounds(source, labelBoundsForTile(tileBounds)), 3),
         );
         const [full, value, label] = await Promise.all([
-          runTesseract(fullCropPath, ["--psm", "6", "tsv"]),
-          runTesseract(valueCropPath, [
+          runTesseract(availability.executablePath, fullCropPath, ["--psm", "6", "tsv"]),
+          runTesseract(availability.executablePath, valueCropPath, [
             "--psm",
             "7",
             "-c",
             "tessedit_char_whitelist=0123456789.-+",
             "tsv",
           ]),
-          runTesseract(labelCropPath, [
+          runTesseract(availability.executablePath, labelCropPath, [
             "--psm",
             "7",
             "-c",
