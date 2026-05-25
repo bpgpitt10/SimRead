@@ -64,9 +64,11 @@ async function main() {
       JSON.stringify(
         {
           frameSource: frame.frame.source,
+          provider: frame.provider,
           visibleFields: frame.practice?.gsproVisibility?.visibleFields ?? [],
           resolvedShot: frame.practice?.resolvedShot ?? null,
           ogcEligibility: frame.practice?.ogcEligibility ?? null,
+          layoutSupport: frame.practice?.layoutSupport ?? null,
         },
         null,
         2,

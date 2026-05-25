@@ -4,7 +4,8 @@ import { copyFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { HttpVisionProvider } from "../../vision/providers/httpVisionProvider";
+import { buildGsproPracticeFrame } from "../../extraction/gspro/buildGsproPracticeFrame";
+import { readGsproCapture } from "../../extraction/gspro/readGsproCapture";
 import type { ExtractedFrame } from "../types";
 import type { CaptureProvider, WindowInfo } from "./CaptureProvider";
 
@@ -345,11 +346,6 @@ const saveDebugCapture = async (capturePath: string) => {
 
 export class WindowsCaptureProvider implements CaptureProvider {
   private selectedWindowId: string | undefined;
-  private readonly visionProvider: HttpVisionProvider;
-
-  constructor() {
-    this.visionProvider = new HttpVisionProvider();
-  }
 
   async start(): Promise<void> {
     if (process.platform !== "win32") {
@@ -461,22 +457,39 @@ export class WindowsCaptureProvider implements CaptureProvider {
 
       await saveDebugCapture(capturePath);
 
-      let extractedFrame;
       try {
-        extractedFrame = await this.visionProvider.extract(capturePath, "practice");
+        const extraction = await readGsproCapture(capturePath);
+
+        if (
+          !extraction.ocrRan &&
+          extraction.warnings.some((warning) =>
+            warning.toLowerCase().includes("tesseract executable was not found"),
+          )
+        ) {
+          throw new Error("Local OCR unavailable: tesseract not found on PATH");
+        }
+
+        const extractedFrame = buildGsproPracticeFrame(extraction, {
+          source: "windows-capture",
+        });
+
+        return {
+          ...extractedFrame,
+          frame: {
+            ...extractedFrame.frame,
+            source: "windows-capture",
+          },
+        } as ExtractedFrame;
       } catch (error) {
+        const message = getErrorMessage(error);
+        if (message === "Local OCR unavailable: tesseract not found on PATH") {
+          throw error;
+        }
+
         throw new Error(
-          `HttpVisionProvider/extraction failure: ${getErrorMessage(error)}`,
+          `Local OCR extraction failure: ${message}`,
         );
       }
-
-      return {
-        ...extractedFrame,
-        frame: {
-          ...extractedFrame.frame,
-          source: "windows-capture",
-        },
-      };
     } finally {
       await rm(capturePath, { force: true }).catch(() => undefined);
     }
