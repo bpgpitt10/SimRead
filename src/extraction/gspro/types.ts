@@ -50,25 +50,23 @@ export type GsproCaptureExtraction = {
   warnings: string[];
 };
 
-export const GS_PRO_FIELD_DEFINITIONS = [
-  { key: "totalDistance", label: "Total Length", aliases: ["total length"] },
-  { key: "carryGame", label: "Carry (game)", aliases: ["carry game", "carry (game)"] },
-  { key: "carryRaw", label: "Carry (raw)", aliases: ["carry raw", "carry (raw)"] },
-  { key: "offline", label: "Offline (raw)", aliases: ["offline raw", "offline (raw)", "offline"] },
-  { key: "ballSpeed", label: "Ball Speed", aliases: ["ball speed"] },
-  { key: "vla", label: "VLA", aliases: ["vla"] },
-  { key: "hla", label: "HLA", aliases: ["hla"] },
-  { key: "spin", label: "Total Spin", aliases: ["total spin"] },
-  { key: "spinAxis", label: "Spin Axis", aliases: ["spin axis"] },
-  { key: "peakHeight", label: "Peak Height", aliases: ["peak height"] },
-  { key: "descentAngle", label: "Descent Angle", aliases: ["descent angle"] },
-  { key: "backSpin", label: "Back Spin", aliases: ["back spin"] },
-  { key: "sideSpin", label: "Side Spin", aliases: ["side spin"] },
-] as const;
+export const GS_PRO_FIELD_DEFINITIONS = GS_PRO_METRIC_CATALOG.map((entry) => ({
+  key: entry.field,
+  label: entry.canonicalLabel,
+  aliases: entry.aliases,
+  unit: entry.unit,
+  expectedRange: entry.expectedRange,
+}));
 
 export type GsproFieldDefinition = (typeof GS_PRO_FIELD_DEFINITIONS)[number];
-export type GsproFieldKey = GsproFieldDefinition["key"];
-export const GS_PRO_TARGET_FIELD_LABELS = GS_PRO_FIELD_DEFINITIONS.map(
-  (field) => field.label,
+export type GsproFieldKey = GsproMetricCatalogField;
+export const GS_PRO_TARGET_FIELD_LABELS = GS_PRO_LOOPER_REQUIRED_FIELDS.map(
+  (field) =>
+    GS_PRO_METRIC_CATALOG.find((entry) => entry.field === field)!.canonicalLabel,
 );
 export type GsproTargetFieldLabel = (typeof GS_PRO_TARGET_FIELD_LABELS)[number];
+import {
+  GS_PRO_LOOPER_REQUIRED_FIELDS,
+  GS_PRO_METRIC_CATALOG,
+  GsproMetricCatalogField,
+} from "./gsproMetricCatalog";

@@ -1,7 +1,10 @@
 import {
-  GS_PRO_FIELD_DEFINITIONS,
+  GS_PRO_LOOPER_REQUIRED_FIELDS,
+  GS_PRO_METRIC_CATALOG,
+  GsproMetricCatalogEntry,
+} from "./gsproMetricCatalog";
+import {
   GsproCaptureExtraction,
-  GsproFieldDefinition,
   GsproFieldKey,
   GsproFields,
   GsproTileExtraction,
@@ -52,14 +55,14 @@ const levenshteinDistance = (left: string, right: string) => {
   return previous[right.length]!;
 };
 
-const labelCandidatesForField = (field: GsproFieldDefinition) => [
-  field.label,
+const labelCandidatesForField = (field: GsproMetricCatalogEntry) => [
+  field.canonicalLabel,
   ...field.aliases,
 ];
 
 const bestLabelMatch = (
   text: string,
-): { field: GsproFieldDefinition; score: number } | undefined => {
+): { field: GsproMetricCatalogEntry; score: number } | undefined => {
   const normalizedText = normalizeLabelText(text);
 
   if (!normalizedText) {
@@ -67,10 +70,10 @@ const bestLabelMatch = (
   }
 
   let best:
-    | { field: GsproFieldDefinition; score: number; candidate: string }
+    | { field: GsproMetricCatalogEntry; score: number; candidate: string }
     | undefined;
 
-  for (const field of GS_PRO_FIELD_DEFINITIONS) {
+  for (const field of GS_PRO_METRIC_CATALOG) {
     for (const candidate of labelCandidatesForField(field)) {
       const normalizedCandidate = normalizeLabelText(candidate);
       const directMatch =
@@ -121,27 +124,17 @@ const inferUnit = (key: GsproFieldKey, rawText: string) => {
     return explicitUnit.toUpperCase();
   }
 
-  if (key === "ballSpeed") {
+  const entry = GS_PRO_METRIC_CATALOG.find((metric) => metric.field === key);
+  if (entry?.unit === "mph") {
     return "MPH";
   }
-  if (key === "spin" || key === "backSpin" || key === "sideSpin") {
+  if (entry?.unit === "rpm") {
     return "RPM";
   }
-  if (
-    key === "vla" ||
-    key === "hla" ||
-    key === "spinAxis" ||
-    key === "descentAngle"
-  ) {
+  if (entry?.unit === "deg") {
     return "DEG";
   }
-  if (
-    key === "totalDistance" ||
-    key === "carryGame" ||
-    key === "carryRaw" ||
-    key === "offline" ||
-    key === "peakHeight"
-  ) {
+  if (entry?.unit === "distance") {
     return "YDS";
   }
 
@@ -173,22 +166,13 @@ const suspiciousValueWarning = (
   key: GsproFieldKey,
   value: number,
 ): string | undefined => {
-  const ranges: Record<GsproFieldKey, { min: number; max: number }> = {
-    totalDistance: { min: 0, max: 500 },
-    carryGame: { min: 0, max: 500 },
-    carryRaw: { min: 0, max: 500 },
-    offline: { min: -250, max: 250 },
-    ballSpeed: { min: 0, max: 250 },
-    vla: { min: -30, max: 80 },
-    hla: { min: -90, max: 90 },
-    spin: { min: 0, max: 20000 },
-    spinAxis: { min: -90, max: 90 },
-    peakHeight: { min: 0, max: 250 },
-    descentAngle: { min: -90, max: 90 },
-    backSpin: { min: -20000, max: 20000 },
-    sideSpin: { min: -20000, max: 20000 },
-  };
-  const range = ranges[key];
+  const range = GS_PRO_METRIC_CATALOG.find(
+    (entry) => entry.field === key,
+  )?.expectedRange;
+
+  if (!range) {
+    return undefined;
+  }
 
   if (value < range.min || value > range.max) {
     return `${key} value ${value} is outside expected range ${range.min}..${range.max}.`;
@@ -224,8 +208,8 @@ const buildTile = (
     tile.labelText = labelText;
   }
   if (labelMatch) {
-    tile.label = labelMatch.field.label;
-    tile.key = labelMatch.field.key;
+    tile.label = labelMatch.field.canonicalLabel;
+    tile.key = labelMatch.field.field as GsproFieldKey;
     tile.matchScore = labelMatch.score;
   }
   if (parsedValue.value !== undefined) {
@@ -347,9 +331,9 @@ export const normalizeGsproTiles = (
     tiles,
     normalizedTiles,
     gsproFields,
-    missingFields: GS_PRO_FIELD_DEFINITIONS.filter(
-      (field) => gsproFields[field.key] === undefined,
-    ).map((field) => field.key),
+    missingFields: GS_PRO_LOOPER_REQUIRED_FIELDS.filter(
+      (field) => gsproFields[field] === undefined,
+    ),
     warnings: Array.from(new Set(normalizedWarnings)),
   };
 };
