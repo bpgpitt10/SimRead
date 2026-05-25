@@ -234,6 +234,15 @@ type GsproSelectionResult = {
   candidates: GsproMatchedWindow[];
 };
 
+type WindowsCaptureProviderOptions = {
+  logLatestCapture?: boolean;
+};
+
+type SaveDebugCaptureOptions = {
+  logLatestCapture: boolean;
+  saveTimestampedCapture: boolean;
+};
+
 const equalsGspro = (value: string | undefined) => value?.toLowerCase() === "gspro";
 
 const getProcessName = (window: WindowInfo) =>
@@ -328,24 +337,44 @@ const formatCaptureTimestamp = (date: Date) =>
     padTimestampPart(date.getSeconds()),
   ].join("");
 
-const saveDebugCapture = async (capturePath: string) => {
+const shouldSaveTimestampedDebugCaptures = () =>
+  process.env.SIMREAD_SAVE_DEBUG_CAPTURES === "1";
+
+const saveDebugCapture = async (
+  capturePath: string,
+  options: SaveDebugCaptureOptions,
+) => {
   const debugCaptureDir = resolve("debug-captures");
   const latestCapturePath = join(debugCaptureDir, "latest-gspro-capture.png");
-  const timestampedCapturePath = join(
-    debugCaptureDir,
-    `gspro-capture-${formatCaptureTimestamp(new Date())}.png`,
-  );
 
   await mkdir(debugCaptureDir, { recursive: true });
   await copyFile(capturePath, latestCapturePath);
-  await copyFile(capturePath, timestampedCapturePath);
 
-  console.log(`[simread:windows] saved capture: ${latestCapturePath}`);
-  console.log(`[simread:windows] saved capture: ${timestampedCapturePath}`);
+  if (options.logLatestCapture) {
+    console.log(`[simread:windows] saved capture: ${latestCapturePath}`);
+  }
+
+  if (options.saveTimestampedCapture) {
+    const timestampedCapturePath = join(
+      debugCaptureDir,
+      `gspro-capture-${formatCaptureTimestamp(new Date())}.png`,
+    );
+
+    await copyFile(capturePath, timestampedCapturePath);
+    console.log(`[simread:windows] saved capture: ${timestampedCapturePath}`);
+  }
 };
 
 export class WindowsCaptureProvider implements CaptureProvider {
   private selectedWindowId: string | undefined;
+  private readonly options: Required<WindowsCaptureProviderOptions>;
+
+  constructor(options: WindowsCaptureProviderOptions = {}) {
+    this.options = {
+      logLatestCapture: true,
+      ...options,
+    };
+  }
 
   async start(): Promise<void> {
     if (process.platform !== "win32") {
@@ -455,7 +484,10 @@ export class WindowsCaptureProvider implements CaptureProvider {
         throw new Error(`Windows capture failure: ${getErrorMessage(error)}`);
       }
 
-      await saveDebugCapture(capturePath);
+      await saveDebugCapture(capturePath, {
+        logLatestCapture: this.options.logLatestCapture,
+        saveTimestampedCapture: shouldSaveTimestampedDebugCaptures(),
+      });
 
       try {
         const extraction = await readGsproCapture(capturePath);

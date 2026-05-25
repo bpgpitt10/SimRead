@@ -65,7 +65,9 @@ const getAcceptedShot = (frame: ExtractedFrame) => {
 };
 
 async function main() {
-  const provider = new WindowsCaptureProvider();
+  const provider = new WindowsCaptureProvider({
+    logLatestCapture: process.env.SIMREAD_SAVE_DEBUG_CAPTURES === "1",
+  });
   let stopped = false;
   let pollCount = 0;
   let acceptedCount = 0;
