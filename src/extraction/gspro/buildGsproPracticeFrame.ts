@@ -92,7 +92,10 @@ const buildGsproFields = (
   return practiceFields;
 };
 
-const buildVisibility = (extraction: GsproCaptureExtraction) => {
+const buildVisibility = (
+  extraction: GsproCaptureExtraction,
+  enrichmentRecommended: boolean,
+) => {
   const visibleFields = Object.entries(extraction.gsproFields)
     .filter(([, value]) => typeof value === "number")
     .map(([key]) => key)
@@ -108,21 +111,18 @@ const buildVisibility = (extraction: GsproCaptureExtraction) => {
     completenessScore: roundToTwoDecimals(
       visibleFields.length / allCatalogFields.length,
     ),
-    enrichmentRecommended: OGC_INPUT_FIELDS.some(
-      (field) => !visibleFieldSet.has(field),
-    ),
+    enrichmentRecommended,
   };
 };
 
 const buildResolvedShot = (
   fields: GsproCaptureExtraction["gsproFields"],
+  enrichmentRecommended: boolean,
 ): ResolvedPracticeShot => {
   const carry = fields.carryGame ?? fields.carryRaw ?? fields.carryLm;
   const shot: ResolvedPracticeShot = {
     club: "unknown",
-    enrichmentRecommended: OGC_INPUT_FIELDS.some(
-      (field) => !hasNumber(fields, field),
-    ),
+    enrichmentRecommended,
   };
 
   if (carry !== undefined) {
@@ -248,9 +248,15 @@ export const buildGsproPracticeFrame = (
   extraction: GsproCaptureExtraction,
   options: BuildGsproPracticeFrameOptions = {},
 ): ExtractedFrame => {
-  const gsproVisibility = buildVisibility(extraction);
-  const resolvedShot = buildResolvedShot(extraction.gsproFields);
   const ogcEligibility = buildOgcEligibility(extraction.gsproFields);
+  const gsproVisibility = buildVisibility(
+    extraction,
+    ogcEligibility.recommended,
+  );
+  const resolvedShot = buildResolvedShot(
+    extraction.gsproFields,
+    ogcEligibility.recommended,
+  );
   const layoutSupport = buildLayoutSupport(extraction.gsproFields);
 
   return {
