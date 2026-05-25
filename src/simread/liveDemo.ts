@@ -3,21 +3,41 @@ import type { ExtractedFrame, PracticeState } from "./types";
 
 const POLL_INTERVAL_MS = 2000;
 const HEARTBEAT_EVERY_POLLS = 4;
+const SETTLE_WINDOW_MS = 3000;
 
 type ResolvedShot = NonNullable<PracticeState["resolvedShot"]>;
 
-const signatureFields = [
+const coreIdentityFields = [
   "carry",
   "totalDistance",
   "offline",
   "ballSpeed",
+  "spin",
+] as const satisfies readonly (keyof ResolvedShot)[];
+
+const completenessFields = [
+  ...coreIdentityFields,
   "vla",
   "hla",
-  "spin",
   "spinAxis",
   "peakHeight",
   "descentAngle",
 ] as const satisfies readonly (keyof ResolvedShot)[];
+
+type ShotEventName = "provisional-shot" | "shot-update" | "final-shot";
+
+type AcceptedFrame = {
+  frame: ExtractedFrame;
+  shot: ResolvedShot;
+  coreIdentity: string;
+  completenessScore: number;
+  presentFields: string[];
+};
+
+type PendingShot = {
+  finalizeAtMs: number;
+  best: AcceptedFrame;
+};
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
@@ -43,11 +63,32 @@ const hasRequiredShotFields = (shot: ResolvedShot) =>
   shot.totalDistance !== undefined &&
   shot.offline !== undefined;
 
-const buildShotSignature = (shot: ResolvedShot) =>
+const buildCoreIdentity = (shot: ResolvedShot) =>
   JSON.stringify(
     Object.fromEntries(
-      signatureFields.map((field) => [field, shot[field] ?? null]),
+      coreIdentityFields.map((field) => [field, shot[field] ?? null]),
     ),
+  );
+
+const getPresentCompletenessFields = (shot: ResolvedShot) =>
+  completenessFields.filter((field) => shot[field] !== undefined);
+
+const scoreShotCompleteness = (frame: ExtractedFrame, shot: ResolvedShot) =>
+  getPresentCompletenessFields(shot).length +
+  (frame.practice?.gsproVisibility?.visibleFields.length ?? 0) / 100;
+
+const hasSameRequiredIdentity = (left: ResolvedShot, right: ResolvedShot) =>
+  left.carry === right.carry &&
+  left.totalDistance === right.totalDistance &&
+  left.offline === right.offline;
+
+const hasCompatibleCoreIdentity = (left: ResolvedShot, right: ResolvedShot) =>
+  hasSameRequiredIdentity(left, right) &&
+  coreIdentityFields.every(
+    (field) =>
+      left[field] === undefined ||
+      right[field] === undefined ||
+      left[field] === right[field],
   );
 
 const getAcceptedShot = (frame: ExtractedFrame) => {
@@ -64,17 +105,70 @@ const getAcceptedShot = (frame: ExtractedFrame) => {
   return shot;
 };
 
+const toAcceptedFrame = (frame: ExtractedFrame, shot: ResolvedShot): AcceptedFrame => ({
+  frame,
+  shot,
+  coreIdentity: buildCoreIdentity(shot),
+  completenessScore: scoreShotCompleteness(frame, shot),
+  presentFields: getPresentCompletenessFields(shot),
+});
+
+const getAddedFields = (previous: AcceptedFrame, next: AcceptedFrame) => {
+  const previousFields = new Set(previous.presentFields);
+
+  return next.presentFields.filter((field) => !previousFields.has(field));
+};
+
+const isBetterFrame = (previous: AcceptedFrame, next: AcceptedFrame) =>
+  next.completenessScore > previous.completenessScore;
+
+const emitShotEvent = (
+  event: ShotEventName,
+  accepted: AcceptedFrame,
+  sequence: number,
+  addedFields: readonly string[] = [],
+) => {
+  console.log(
+    JSON.stringify(
+      {
+        event,
+        timestamp: new Date().toISOString(),
+        sequence,
+        coreIdentity: accepted.coreIdentity,
+        ...(addedFields.length > 0 ? { addedFields } : {}),
+        resolvedShot: accepted.shot,
+        visibleFields: accepted.frame.practice?.gsproVisibility?.visibleFields ?? [],
+        ogcEligibility: accepted.frame.practice?.ogcEligibility ?? null,
+        layoutSupport: accepted.frame.practice?.layoutSupport ?? null,
+      },
+      null,
+      2,
+    ),
+  );
+};
+
 async function main() {
   const provider = new WindowsCaptureProvider({
     logLatestCapture: process.env.SIMREAD_SAVE_DEBUG_CAPTURES === "1",
   });
   let stopped = false;
   let pollCount = 0;
-  let acceptedCount = 0;
-  let lastAcceptedSignature: string | undefined;
+  let shotSequence = 0;
+  let pendingShot: PendingShot | undefined;
+  let lastFinalizedShot: AcceptedFrame | undefined;
 
   const stop = () => {
     stopped = true;
+  };
+
+  const finalizePendingShot = () => {
+    if (!pendingShot) {
+      return;
+    }
+
+    emitShotEvent("final-shot", pendingShot.best, shotSequence);
+    lastFinalizedShot = pendingShot.best;
+    pendingShot = undefined;
   };
 
   process.once("SIGINT", () => {
@@ -108,6 +202,11 @@ async function main() {
 
   while (!stopped) {
     pollCount += 1;
+    const nowMs = Date.now();
+
+    if (pendingShot && nowMs >= pendingShot.finalizeAtMs) {
+      finalizePendingShot();
+    }
 
     try {
       const frame = await provider.capture();
@@ -122,28 +221,49 @@ async function main() {
         continue;
       }
 
-      const signature = buildShotSignature(shot);
-      if (signature !== lastAcceptedSignature) {
-        lastAcceptedSignature = signature;
-        acceptedCount += 1;
+      const accepted = toAcceptedFrame(frame, shot);
+      if (
+        lastFinalizedShot &&
+        !pendingShot &&
+        hasCompatibleCoreIdentity(lastFinalizedShot.shot, accepted.shot)
+      ) {
+        if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+          console.log(`[simread:live] heartbeat: no new shot (${shotSequence} finalized)`);
+        }
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
 
-        console.log(
-          JSON.stringify(
-            {
-              event: "new-shot",
-              timestamp: new Date().toISOString(),
-              acceptedCount,
-              resolvedShot: shot,
-              visibleFields: frame.practice?.gsproVisibility?.visibleFields ?? [],
-              ogcEligibility: frame.practice?.ogcEligibility ?? null,
-              layoutSupport: frame.practice?.layoutSupport ?? null,
-            },
-            null,
-            2,
-          ),
-        );
-      } else if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
-        console.log(`[simread:live] heartbeat: no new shot (${acceptedCount} emitted)`);
+      if (!pendingShot) {
+        shotSequence += 1;
+        const startedAtMs = Date.now();
+        pendingShot = {
+          finalizeAtMs: startedAtMs + SETTLE_WINDOW_MS,
+          best: accepted,
+        };
+        emitShotEvent("provisional-shot", accepted, shotSequence);
+      } else if (hasCompatibleCoreIdentity(pendingShot.best.shot, accepted.shot)) {
+        const addedFields = getAddedFields(pendingShot.best, accepted);
+
+        if (isBetterFrame(pendingShot.best, accepted)) {
+          pendingShot = {
+            ...pendingShot,
+            best: accepted,
+          };
+
+          if (addedFields.length > 0) {
+            emitShotEvent("shot-update", accepted, shotSequence, addedFields);
+          }
+        }
+      } else {
+        finalizePendingShot();
+        shotSequence += 1;
+        const startedAtMs = Date.now();
+        pendingShot = {
+          finalizeAtMs: startedAtMs + SETTLE_WINDOW_MS,
+          best: accepted,
+        };
+        emitShotEvent("provisional-shot", accepted, shotSequence);
       }
     } catch (error) {
       const message = getErrorMessage(error);
@@ -155,9 +275,14 @@ async function main() {
       }
     }
 
+    if (pendingShot && Date.now() >= pendingShot.finalizeAtMs) {
+      finalizePendingShot();
+    }
+
     await sleep(POLL_INTERVAL_MS);
   }
 
+  finalizePendingShot();
   await provider.stop?.();
   console.log("[simread:live] stopped");
 }
