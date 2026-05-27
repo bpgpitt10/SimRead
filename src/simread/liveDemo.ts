@@ -1,3 +1,4 @@
+import { readGsproRangeShots } from "../extraction/gspro/files/readGsproRangeShots";
 import { WindowsCaptureProvider } from "./providers/WindowsCaptureProvider";
 import type { ExtractedFrame, PracticeState } from "./types";
 
@@ -32,6 +33,8 @@ type AcceptedFrame = {
   coreIdentity: string;
   completenessScore: number;
   presentFields: string[];
+  source: ExtractedFrame["frame"]["source"];
+  rowId?: number;
 };
 
 type PendingShot = {
@@ -105,12 +108,19 @@ const getAcceptedShot = (frame: ExtractedFrame) => {
   return shot;
 };
 
-const toAcceptedFrame = (frame: ExtractedFrame, shot: ResolvedShot): AcceptedFrame => ({
+const toAcceptedFrame = (
+  frame: ExtractedFrame,
+  shot: ResolvedShot,
+  identityOverride?: string,
+  rowId?: number,
+): AcceptedFrame => ({
   frame,
   shot,
-  coreIdentity: buildCoreIdentity(shot),
+  coreIdentity: identityOverride ?? buildCoreIdentity(shot),
   completenessScore: scoreShotCompleteness(frame, shot),
   presentFields: getPresentCompletenessFields(shot),
+  source: frame.frame.source,
+  ...(rowId !== undefined ? { rowId } : {}),
 });
 
 const getAddedFields = (previous: AcceptedFrame, next: AcceptedFrame) => {
@@ -134,7 +144,9 @@ const emitShotEvent = (
         event,
         timestamp: new Date().toISOString(),
         sequence,
+        source: accepted.source,
         coreIdentity: accepted.coreIdentity,
+        ...(accepted.rowId !== undefined ? { rowId: accepted.rowId } : {}),
         ...(addedFields.length > 0 ? { addedFields } : {}),
         resolvedShot: accepted.shot,
         visibleFields: accepted.frame.practice?.gsproVisibility?.visibleFields ?? [],
@@ -156,6 +168,9 @@ async function main() {
   let shotSequence = 0;
   let pendingShot: PendingShot | undefined;
   let lastFinalizedShot: AcceptedFrame | undefined;
+  let lastHandledRangeRowId: number | undefined;
+  let rangeDbUnavailableLogged = false;
+  let ocrWindowSelected = false;
 
   const stop = () => {
     stopped = true;
@@ -176,29 +191,40 @@ async function main() {
     stop();
   });
 
-  const selection = await provider.selectBestGsproWindow();
-
-  if (selection.status === "not_found") {
-    console.log("[simread:live] GSPro window not found. Open GSPro with a visible shot and try again.");
-    return;
-  }
-
-  if (selection.status === "ambiguous") {
-    console.log("[simread:live] multiple GSPro windows found; close extras or use simread:windows to inspect candidates.");
-    for (const candidate of selection.candidates) {
-      console.log(
-        `[simread:live] candidate id=${candidate.id} match=${candidate.gsproMatchStrength} title=${candidate.title}`,
-      );
+  const ensureOcrWindowSelected = async () => {
+    if (ocrWindowSelected) {
+      return true;
     }
-    return;
-  }
 
-  console.log(
-    `[simread:live] selected GSPro window id=${selection.selectedWindow?.id ?? "unknown"} match=${
-      selection.selectedWindow?.gsproMatchStrength ?? "unknown"
-    }`,
-  );
-  console.log(`[simread:live] polling every ${POLL_INTERVAL_MS}ms`);
+    const selection = await provider.selectBestGsproWindow();
+
+    if (selection.status === "not_found") {
+      if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+        console.log("[simread:live] OCR fallback unavailable: GSPro window not found.");
+      }
+      return false;
+    }
+
+    if (selection.status === "ambiguous") {
+      console.log("[simread:live] OCR fallback unavailable: multiple GSPro windows found; close extras or use simread:windows to inspect candidates.");
+      for (const candidate of selection.candidates) {
+        console.log(
+          `[simread:live] candidate id=${candidate.id} match=${candidate.gsproMatchStrength} title=${candidate.title}`,
+        );
+      }
+      return false;
+    }
+
+    ocrWindowSelected = true;
+    console.log(
+      `[simread:live] OCR fallback selected GSPro window id=${selection.selectedWindow?.id ?? "unknown"} match=${
+        selection.selectedWindow?.gsproMatchStrength ?? "unknown"
+      }`,
+    );
+    return true;
+  };
+
+  console.log(`[simread:live] polling GSPro range DB first every ${POLL_INTERVAL_MS}ms`);
 
   while (!stopped) {
     pollCount += 1;
@@ -209,6 +235,57 @@ async function main() {
     }
 
     try {
+      try {
+        const [latestRangeShot] = await readGsproRangeShots({ limit: 1 });
+
+        if (!latestRangeShot) {
+          if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+            console.log("[simread:live] range DB heartbeat: no DrivingRangeShot rows found; using OCR fallback");
+          }
+        } else if (latestRangeShot.rowId === lastHandledRangeRowId) {
+          if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+            console.log(`[simread:live] range DB heartbeat: row ${latestRangeShot.rowId} already emitted; using OCR fallback`);
+          }
+        } else {
+          const shot = getAcceptedShot(latestRangeShot.frame);
+
+          if (shot) {
+            finalizePendingShot();
+            shotSequence += 1;
+            const accepted = toAcceptedFrame(
+              latestRangeShot.frame,
+              shot,
+              `gspro-range-db:${latestRangeShot.rowId}`,
+              latestRangeShot.rowId,
+            );
+            emitShotEvent("final-shot", accepted, shotSequence);
+            lastFinalizedShot = accepted;
+            lastHandledRangeRowId = latestRangeShot.rowId;
+            await sleep(POLL_INTERVAL_MS);
+            continue;
+          }
+
+          lastHandledRangeRowId = latestRangeShot.rowId;
+          console.log(
+            `[simread:live] range DB row ${latestRangeShot.rowId} missing required fields; using OCR fallback`,
+          );
+        }
+
+        rangeDbUnavailableLogged = false;
+      } catch (error) {
+        if (!rangeDbUnavailableLogged || pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+          console.error(
+            `[simread:live] range DB unavailable; using OCR fallback: ${getErrorMessage(error)}`,
+          );
+        }
+        rangeDbUnavailableLogged = true;
+      }
+
+      if (!(await ensureOcrWindowSelected())) {
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
       const frame = await provider.capture();
       const shot = getAcceptedShot(frame);
 

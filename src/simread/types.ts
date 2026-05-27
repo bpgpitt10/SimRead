@@ -5,12 +5,7 @@ import type {
 
 export type PracticeState = BasePracticeState;
 
-export type ExtractedFrame = Omit<BaseExtractedFrame, "frame"> & {
-  frame: {
-    timestampMs: number;
-    source: "mock" | "windows-capture";
-  };
-};
+export type ExtractedFrame = BaseExtractedFrame;
 
 export type FrameListener = (frame: ExtractedFrame) => void;
 
