@@ -2,7 +2,9 @@ import { readGsproRangeShots } from "../extraction/gspro/files/readGsproRangeSho
 import { WindowsCaptureProvider } from "./providers/WindowsCaptureProvider";
 import type { ExtractedFrame, PracticeState } from "./types";
 
-const POLL_INTERVAL_MS = 2000;
+const DEFAULT_RANGE_DB_POLL_MS = 500;
+const MIN_RANGE_DB_POLL_MS = 200;
+const DEFAULT_OCR_FALLBACK_POLL_MS = 3000;
 const HEARTBEAT_EVERY_POLLS = 4;
 const SETTLE_WINDOW_MS = 3000;
 
@@ -35,6 +37,12 @@ type AcceptedFrame = {
   presentFields: string[];
   source: ExtractedFrame["frame"]["source"];
   rowId?: number;
+  rangeDbTiming?: {
+    rowId: number;
+    dateCreated: string | number | null;
+    emitTimestamp: string;
+    ageMs?: number;
+  };
 };
 
 type PendingShot = {
@@ -46,6 +54,28 @@ const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+
+const readPollMs = (
+  envName: string,
+  defaultMs: number,
+  minimumMs?: number,
+) => {
+  const rawValue = process.env[envName];
+  if (rawValue === undefined) {
+    return defaultMs;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[simread:live] ignoring invalid ${envName}=${JSON.stringify(rawValue)}; using ${defaultMs}ms`,
+    );
+    return defaultMs;
+  }
+
+  const rounded = Math.round(parsed);
+  return minimumMs === undefined ? rounded : Math.max(rounded, minimumMs);
+};
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -113,6 +143,7 @@ const toAcceptedFrame = (
   shot: ResolvedShot,
   identityOverride?: string,
   rowId?: number,
+  rangeDbTiming?: AcceptedFrame["rangeDbTiming"],
 ): AcceptedFrame => ({
   frame,
   shot,
@@ -121,6 +152,7 @@ const toAcceptedFrame = (
   presentFields: getPresentCompletenessFields(shot),
   source: frame.frame.source,
   ...(rowId !== undefined ? { rowId } : {}),
+  ...(rangeDbTiming !== undefined ? { rangeDbTiming } : {}),
 });
 
 const getAddedFields = (previous: AcceptedFrame, next: AcceptedFrame) => {
@@ -131,6 +163,35 @@ const getAddedFields = (previous: AcceptedFrame, next: AcceptedFrame) => {
 
 const isBetterFrame = (previous: AcceptedFrame, next: AcceptedFrame) =>
   next.completenessScore > previous.completenessScore;
+
+const parseGsproDateCreatedMs = (dateCreated: string | number | null) => {
+  if (dateCreated === null) {
+    return undefined;
+  }
+
+  const parsed =
+    typeof dateCreated === "number"
+      ? new Date(dateCreated).getTime()
+      : new Date(dateCreated.replace(" ", "T")).getTime();
+
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const buildRangeDbTiming = (
+  rowId: number,
+  dateCreated: string | number | null,
+) => {
+  const emitMs = Date.now();
+  const emitTimestamp = new Date(emitMs).toISOString();
+  const dateCreatedMs = parseGsproDateCreatedMs(dateCreated);
+
+  return {
+    rowId,
+    dateCreated,
+    emitTimestamp,
+    ...(dateCreatedMs !== undefined ? { ageMs: emitMs - dateCreatedMs } : {}),
+  };
+};
 
 const emitShotEvent = (
   event: ShotEventName,
@@ -147,6 +208,9 @@ const emitShotEvent = (
         source: accepted.source,
         coreIdentity: accepted.coreIdentity,
         ...(accepted.rowId !== undefined ? { rowId: accepted.rowId } : {}),
+        ...(accepted.rangeDbTiming !== undefined
+          ? { rangeDbTiming: accepted.rangeDbTiming }
+          : {}),
         ...(addedFields.length > 0 ? { addedFields } : {}),
         resolvedShot: accepted.shot,
         visibleFields: accepted.frame.practice?.gsproVisibility?.visibleFields ?? [],
@@ -160,6 +224,15 @@ const emitShotEvent = (
 };
 
 async function main() {
+  const rangeDbPollMs = readPollMs(
+    "SIMREAD_RANGE_DB_POLL_MS",
+    DEFAULT_RANGE_DB_POLL_MS,
+    MIN_RANGE_DB_POLL_MS,
+  );
+  const ocrFallbackPollMs = readPollMs(
+    "SIMREAD_OCR_FALLBACK_POLL_MS",
+    DEFAULT_OCR_FALLBACK_POLL_MS,
+  );
   const provider = new WindowsCaptureProvider({
     logLatestCapture: process.env.SIMREAD_SAVE_DEBUG_CAPTURES === "1",
   });
@@ -171,6 +244,7 @@ async function main() {
   let lastEmittedRangeRowId: number | undefined;
   let rangeDbUnavailableLogged = false;
   let ocrWindowSelected = false;
+  let nextOcrFallbackAtMs = 0;
 
   const stop = () => {
     stopped = true;
@@ -224,7 +298,9 @@ async function main() {
     return true;
   };
 
-  console.log(`[simread:live] polling GSPro range DB first every ${POLL_INTERVAL_MS}ms`);
+  console.log(
+    `[simread:live] polling GSPro range DB first every ${rangeDbPollMs}ms; OCR fallback every ${ocrFallbackPollMs}ms when needed`,
+  );
 
   while (!stopped) {
     pollCount += 1;
@@ -248,7 +324,7 @@ async function main() {
               `[simread:live] range DB heartbeat: waiting for new range DB shot after row ${latestRangeShot.rowId}`,
             );
           }
-          await sleep(POLL_INTERVAL_MS);
+          await sleep(rangeDbPollMs);
           continue;
         } else {
           const shot = getAcceptedShot(latestRangeShot.frame);
@@ -256,16 +332,21 @@ async function main() {
           if (shot) {
             finalizePendingShot();
             shotSequence += 1;
+            const rangeDbTiming = buildRangeDbTiming(
+              latestRangeShot.rowId,
+              latestRangeShot.dateCreated,
+            );
             const accepted = toAcceptedFrame(
               latestRangeShot.frame,
               shot,
               `gspro-range-db:${latestRangeShot.rowId}`,
               latestRangeShot.rowId,
+              rangeDbTiming,
             );
             emitShotEvent("final-shot", accepted, shotSequence);
             lastFinalizedShot = accepted;
             lastEmittedRangeRowId = latestRangeShot.rowId;
-            await sleep(POLL_INTERVAL_MS);
+            await sleep(rangeDbPollMs);
             continue;
           }
 
@@ -284,8 +365,14 @@ async function main() {
         rangeDbUnavailableLogged = true;
       }
 
+      if (Date.now() < nextOcrFallbackAtMs) {
+        await sleep(rangeDbPollMs);
+        continue;
+      }
+
+      nextOcrFallbackAtMs = Date.now() + ocrFallbackPollMs;
       if (!(await ensureOcrWindowSelected())) {
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(rangeDbPollMs);
         continue;
       }
 
@@ -297,7 +384,7 @@ async function main() {
           console.log("[simread:live] heartbeat: waiting for supported shot fields");
         }
 
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(rangeDbPollMs);
         continue;
       }
 
@@ -310,7 +397,7 @@ async function main() {
         if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
           console.log(`[simread:live] heartbeat: no new shot (${shotSequence} finalized)`);
         }
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(rangeDbPollMs);
         continue;
       }
 
@@ -359,7 +446,7 @@ async function main() {
       finalizePendingShot();
     }
 
-    await sleep(POLL_INTERVAL_MS);
+    await sleep(rangeDbPollMs);
   }
 
   finalizePendingShot();
