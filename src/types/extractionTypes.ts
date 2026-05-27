@@ -16,10 +16,12 @@ export type TileValue = {
 
 export type GsproPracticeFields = {
   club?: string;
+  carry?: number;
   carryGame?: number;
   carryRaw?: number;
   carryLm?: number;
   totalDistance?: number;
+  totalSpin?: number;
   spin?: number;
   spinAxis?: number;
   hla?: number;
@@ -35,6 +37,14 @@ export type GsproPracticeFields = {
   backSpin?: number;
   sideSpin?: number;
   clubSpeed?: number;
+  clubLie?: number;
+  clubLoft?: number;
+  dynamicLoft?: number;
+  closureRate?: number;
+  clubFaceHImpact?: number;
+  clubFaceVImpact?: number;
+  smashFactor?: number;
+  distToPin?: number;
 };
 
 export type GsproVisibility = {
@@ -101,7 +111,12 @@ export type CourseState = {
 export type ExtractedFrame = {
   frame: {
     timestampMs: number;
-    source: "screenshot" | "mock" | "windows-capture" | "ocr-debug-capture";
+    source:
+      | "screenshot"
+      | "mock"
+      | "windows-capture"
+      | "ocr-debug-capture"
+      | "gspro-range-db";
   };
   mode: "practice" | "course";
   practice?: PracticeState;

@@ -10,6 +10,7 @@
     "simread:live": "ts-node src/simread/liveDemo.ts",
     "simread:windows": "ts-node src/simread/windowsDemo.ts",
     "simread:ocr": "ts-node src/extraction/gspro/readGsproCapture.ts",
+    "simread:range-db": "ts-node src/extraction/gspro/files/readGsproRangeShots.ts",
     "simread:ocr-check": "ts-node src/extraction/gspro/readers/resolveTesseractPath.ts"
   },
   "keywords": [],
@@ -19,7 +20,9 @@
   "dependencies": {
     "@types/node": "^25.6.0",
     "@types/pngjs": "^6.0.5",
+    "@types/sql.js": "^1.4.11",
     "pngjs": "^7.0.0",
+    "sql.js": "^1.14.1",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }
