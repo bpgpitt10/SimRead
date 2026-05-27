@@ -168,7 +168,7 @@ async function main() {
   let shotSequence = 0;
   let pendingShot: PendingShot | undefined;
   let lastFinalizedShot: AcceptedFrame | undefined;
-  let lastHandledRangeRowId: number | undefined;
+  let lastEmittedRangeRowId: number | undefined;
   let rangeDbUnavailableLogged = false;
   let ocrWindowSelected = false;
 
@@ -242,10 +242,14 @@ async function main() {
           if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
             console.log("[simread:live] range DB heartbeat: no DrivingRangeShot rows found; using OCR fallback");
           }
-        } else if (latestRangeShot.rowId === lastHandledRangeRowId) {
+        } else if (latestRangeShot.rowId === lastEmittedRangeRowId) {
           if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
-            console.log(`[simread:live] range DB heartbeat: row ${latestRangeShot.rowId} already emitted; using OCR fallback`);
+            console.log(
+              `[simread:live] range DB heartbeat: waiting for new range DB shot after row ${latestRangeShot.rowId}`,
+            );
           }
+          await sleep(POLL_INTERVAL_MS);
+          continue;
         } else {
           const shot = getAcceptedShot(latestRangeShot.frame);
 
@@ -260,12 +264,11 @@ async function main() {
             );
             emitShotEvent("final-shot", accepted, shotSequence);
             lastFinalizedShot = accepted;
-            lastHandledRangeRowId = latestRangeShot.rowId;
+            lastEmittedRangeRowId = latestRangeShot.rowId;
             await sleep(POLL_INTERVAL_MS);
             continue;
           }
 
-          lastHandledRangeRowId = latestRangeShot.rowId;
           console.log(
             `[simread:live] range DB row ${latestRangeShot.rowId} missing required fields; using OCR fallback`,
           );
