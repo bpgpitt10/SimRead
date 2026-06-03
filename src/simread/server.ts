@@ -1,5 +1,6 @@
 import http, { ServerResponse } from "node:http";
 import { runSimReadLive, SimReadLiveEvent } from "./liveEventLoop";
+import { isOcrFallbackEnabled, resolveSimReadMode } from "./mode";
 
 const DEFAULT_PORT = 8788;
 const HOST = "127.0.0.1";
@@ -89,10 +90,14 @@ const server = http.createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://${HOST}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
+    const mode = resolveSimReadMode();
+
     writeJson(response, 200, {
       ok: true,
       service: "simread",
-      mode: "gspro-range-db-first",
+      mode,
+      source: mode === "range-db-only" ? "gspro-range-db" : "gspro-range-db-first",
+      ocrFallbackEnabled: isOcrFallbackEnabled(mode),
     });
     return;
   }

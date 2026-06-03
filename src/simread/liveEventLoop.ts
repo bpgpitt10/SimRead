@@ -1,10 +1,12 @@
 import { readGsproRangeShots } from "../extraction/gspro/files/readGsproRangeShots";
+import { isOcrFallbackEnabled, resolveSimReadMode } from "./mode";
 import { WindowsCaptureProvider } from "./providers/WindowsCaptureProvider";
 import type { ExtractedFrame, PracticeState } from "./types";
 
 const DEFAULT_RANGE_DB_POLL_MS = 500;
 const MIN_RANGE_DB_POLL_MS = 200;
 const DEFAULT_OCR_FALLBACK_POLL_MS = 3000;
+const DEFAULT_RANGE_DB_ONLY_STALE_MS = 30_000;
 const HEARTBEAT_EVERY_POLLS = 4;
 const SETTLE_WINDOW_MS = 3000;
 
@@ -116,6 +118,27 @@ const readPollMs = (
 
   const rounded = Math.round(parsed);
   return minimumMs === undefined ? rounded : Math.max(rounded, minimumMs);
+};
+
+const readOptionalPositiveMs = (
+  envName: string,
+  defaultMs: number,
+  emitStatus: (message: string) => void,
+) => {
+  const rawValue = process.env[envName];
+  if (rawValue === undefined) {
+    return defaultMs;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    emitStatus(
+      `ignoring invalid ${envName}=${JSON.stringify(rawValue)}; using ${defaultMs}ms`,
+    );
+    return defaultMs;
+  }
+
+  return Math.round(parsed);
 };
 
 const getErrorMessage = (error: unknown) =>
@@ -234,6 +257,14 @@ const buildRangeDbTiming = (
   };
 };
 
+const getRangeDbAgeMs = (dateCreated: string | number | null) => {
+  const dateCreatedMs = parseGsproDateCreatedMs(dateCreated);
+  return dateCreatedMs === undefined ? undefined : Date.now() - dateCreatedMs;
+};
+
+const formatAgeMs = (ageMs: number) =>
+  ageMs >= 1000 ? `${Math.round(ageMs / 1000)}s` : `${ageMs}ms`;
+
 const buildShotEvent = (
   event: ShotEventName,
   accepted: AcceptedFrame,
@@ -277,15 +308,24 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
     MIN_RANGE_DB_POLL_MS,
     emitStatus,
   );
+  const mode = resolveSimReadMode();
+  const ocrFallbackEnabled = isOcrFallbackEnabled(mode);
   const ocrFallbackPollMs = readPollMs(
     "SIMREAD_OCR_FALLBACK_POLL_MS",
     DEFAULT_OCR_FALLBACK_POLL_MS,
     undefined,
     emitStatus,
   );
-  const provider = new WindowsCaptureProvider({
-    logLatestCapture: options.logLatestCapture ?? false,
-  });
+  const rangeDbOnlyStaleMs = readOptionalPositiveMs(
+    "SIMREAD_RANGE_DB_STALE_MS",
+    DEFAULT_RANGE_DB_ONLY_STALE_MS,
+    emitStatus,
+  );
+  const provider = ocrFallbackEnabled
+    ? new WindowsCaptureProvider({
+        logLatestCapture: options.logLatestCapture ?? false,
+      })
+    : undefined;
   let stopped = false;
   let pollCount = 0;
   let shotSequence = 0;
@@ -293,6 +333,7 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
   let lastFinalizedShot: AcceptedFrame | undefined;
   let lastEmittedRangeRowId: number | undefined;
   let rangeDbUnavailableLogged = false;
+  let lastRangeDbOnlyProblemKey: string | undefined;
   let ocrWindowSelected = false;
   let nextOcrFallbackAtMs = 0;
 
@@ -318,6 +359,10 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
   };
 
   const ensureOcrWindowSelected = async () => {
+    if (!provider) {
+      return false;
+    }
+
     if (ocrWindowSelected) {
       return true;
     }
@@ -352,9 +397,23 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
     return true;
   };
 
-  emitStatus(
-    `polling GSPro range DB first every ${rangeDbPollMs}ms; OCR fallback every ${ocrFallbackPollMs}ms when needed`,
-  );
+  const shouldEmitRangeDbOnlyProblem = (problemKey: string) => {
+    const shouldEmit =
+      lastRangeDbOnlyProblemKey !== problemKey ||
+      pollCount % HEARTBEAT_EVERY_POLLS === 0;
+    lastRangeDbOnlyProblemKey = problemKey;
+    return shouldEmit;
+  };
+
+  if (ocrFallbackEnabled) {
+    emitStatus(
+      `polling GSPro range DB first every ${rangeDbPollMs}ms; OCR fallback every ${ocrFallbackPollMs}ms when needed`,
+    );
+  } else {
+    emitStatus(
+      `polling GSPro range DB only every ${rangeDbPollMs}ms; OCR fallback disabled`,
+    );
+  }
 
   try {
     while (!stopped) {
@@ -370,8 +429,15 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
           const [latestRangeShot] = await readGsproRangeShots({ limit: 1 });
 
           if (!latestRangeShot) {
-            if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
-              emitStatus("range DB heartbeat: no DrivingRangeShot rows found; using OCR fallback");
+            if (
+              ocrFallbackEnabled ||
+              shouldEmitRangeDbOnlyProblem("empty-driving-range-shot")
+            ) {
+              emitStatus(
+                ocrFallbackEnabled
+                  ? "range DB heartbeat: no DrivingRangeShot rows found; using OCR fallback"
+                  : "range DB heartbeat: no DrivingRangeShot rows found; waiting for range DB shot",
+              );
             }
           } else if (latestRangeShot.rowId === lastEmittedRangeRowId) {
             if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
@@ -383,8 +449,30 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
             continue;
           } else {
             const shot = getAcceptedShot(latestRangeShot.frame);
+            const ageMs = getRangeDbAgeMs(latestRangeShot.dateCreated);
 
             if (shot) {
+              if (
+                !ocrFallbackEnabled &&
+                ageMs !== undefined &&
+                ageMs > rangeDbOnlyStaleMs
+              ) {
+                if (
+                  shouldEmitRangeDbOnlyProblem(
+                    `stale-driving-range-shot:${latestRangeShot.rowId}`,
+                  )
+                ) {
+                  emitError(
+                    `range DB stale: latest DrivingRangeShot row ${latestRangeShot.rowId} is ${formatAgeMs(
+                      ageMs,
+                    )} old; waiting for a fresh row`,
+                  );
+                }
+                await sleep(rangeDbPollMs);
+                continue;
+              }
+
+              lastRangeDbOnlyProblemKey = undefined;
               finalizePendingShot();
               shotSequence += 1;
               const rangeDbTiming = buildRangeDbTiming(
@@ -405,19 +493,36 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
               continue;
             }
 
-            emitStatus(
-              `range DB row ${latestRangeShot.rowId} missing required fields; using OCR fallback`,
-            );
+            if (ocrFallbackEnabled) {
+              emitStatus(
+                `range DB row ${latestRangeShot.rowId} missing required fields; using OCR fallback`,
+              );
+            } else if (
+              shouldEmitRangeDbOnlyProblem(
+                `missing-required-fields:${latestRangeShot.rowId}`,
+              )
+            ) {
+              emitError(
+                `range DB row ${latestRangeShot.rowId} missing required fields: carry, totalDistance, and offline are required`,
+              );
+            }
           }
 
           rangeDbUnavailableLogged = false;
         } catch (error) {
           if (!rangeDbUnavailableLogged || pollCount % HEARTBEAT_EVERY_POLLS === 0) {
             emitError(
-              `range DB unavailable; using OCR fallback: ${getErrorMessage(error)}`,
+              ocrFallbackEnabled
+                ? `range DB unavailable; using OCR fallback: ${getErrorMessage(error)}`
+                : `range DB unavailable: ${getErrorMessage(error)}`,
             );
           }
           rangeDbUnavailableLogged = true;
+        }
+
+        if (!ocrFallbackEnabled) {
+          await sleep(rangeDbPollMs);
+          continue;
         }
 
         if (Date.now() < nextOcrFallbackAtMs) {
@@ -431,7 +536,7 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
           continue;
         }
 
-        const frame = await provider.capture();
+        const frame = await provider!.capture();
         const shot = getAcceptedShot(frame);
 
         if (!shot) {
@@ -507,7 +612,7 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
     }
   } finally {
     finalizePendingShot();
-    await provider.stop?.();
+    await provider?.stop?.();
     abortSignal?.removeEventListener("abort", stop);
     emitStatus("stopped");
   }
