@@ -6,7 +6,7 @@ import type { ExtractedFrame, PracticeState } from "./types";
 const DEFAULT_RANGE_DB_POLL_MS = 500;
 const MIN_RANGE_DB_POLL_MS = 200;
 const DEFAULT_OCR_FALLBACK_POLL_MS = 3000;
-const DEFAULT_RANGE_DB_ONLY_STALE_MS = 30_000;
+const DEFAULT_FRESH_RANGE_SHOT_WAIT_MS = 3000;
 const HEARTBEAT_EVERY_POLLS = 4;
 const SETTLE_WINDOW_MS = 3000;
 
@@ -73,6 +73,9 @@ export type SimReadStatusEvent = {
   event: "status";
   timestamp: string;
   message: string;
+  status?: string;
+  severity?: "info" | "warning" | "error";
+  userAction?: string;
 };
 
 export type SimReadErrorEvent = {
@@ -91,6 +94,44 @@ export type RunSimReadLiveOptions = {
   signal?: AbortSignal;
   logLatestCapture?: boolean;
 };
+
+type RangeDbOnlyStatus = {
+  status:
+    | "waiting-for-fresh-range-shot"
+    | "no-range-shots"
+    | "range-db-unavailable"
+    | "missing-required-fields";
+  severity: "warning" | "error";
+  message: string;
+  userAction: string;
+};
+
+const rangeDbOnlyStatuses = {
+  waitingForFreshRangeShot: {
+    status: "waiting-for-fresh-range-shot",
+    severity: "warning",
+    message: "Waiting for a fresh GSPro Practice Range shot.",
+    userAction: "Open GSPro Practice Range and hit a shot.",
+  },
+  noRangeShots: {
+    status: "no-range-shots",
+    severity: "warning",
+    message: "No GSPro Practice Range shots found yet.",
+    userAction: "Open GSPro Practice Range and hit a shot.",
+  },
+  rangeDbUnavailable: {
+    status: "range-db-unavailable",
+    severity: "error",
+    message: "GSPro range data is not available.",
+    userAction: "Open GSPro Practice Range and try again.",
+  },
+  missingRequiredFields: {
+    status: "missing-required-fields",
+    severity: "error",
+    message: "GSPro range shot is missing required distance fields.",
+    userAction: "Hit another shot on GSPro Practice Range.",
+  },
+} as const satisfies Record<string, RangeDbOnlyStatus>;
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => {
@@ -118,27 +159,6 @@ const readPollMs = (
 
   const rounded = Math.round(parsed);
   return minimumMs === undefined ? rounded : Math.max(rounded, minimumMs);
-};
-
-const readOptionalPositiveMs = (
-  envName: string,
-  defaultMs: number,
-  emitStatus: (message: string) => void,
-) => {
-  const rawValue = process.env[envName];
-  if (rawValue === undefined) {
-    return defaultMs;
-  }
-
-  const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    emitStatus(
-      `ignoring invalid ${envName}=${JSON.stringify(rawValue)}; using ${defaultMs}ms`,
-    );
-    return defaultMs;
-  }
-
-  return Math.round(parsed);
 };
 
 const getErrorMessage = (error: unknown) =>
@@ -257,14 +277,6 @@ const buildRangeDbTiming = (
   };
 };
 
-const getRangeDbAgeMs = (dateCreated: string | number | null) => {
-  const dateCreatedMs = parseGsproDateCreatedMs(dateCreated);
-  return dateCreatedMs === undefined ? undefined : Date.now() - dateCreatedMs;
-};
-
-const formatAgeMs = (ageMs: number) =>
-  ageMs >= 1000 ? `${Math.round(ageMs / 1000)}s` : `${ageMs}ms`;
-
 const buildShotEvent = (
   event: ShotEventName,
   accepted: AcceptedFrame,
@@ -295,6 +307,13 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
       message,
     });
   };
+  const emitStructuredStatus = (status: RangeDbOnlyStatus) => {
+    options.onEvent({
+      event: "status",
+      timestamp: new Date().toISOString(),
+      ...status,
+    });
+  };
   const emitError = (message: string) => {
     options.onEvent({
       event: "error",
@@ -316,11 +335,6 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
     undefined,
     emitStatus,
   );
-  const rangeDbOnlyStaleMs = readOptionalPositiveMs(
-    "SIMREAD_RANGE_DB_STALE_MS",
-    DEFAULT_RANGE_DB_ONLY_STALE_MS,
-    emitStatus,
-  );
   const provider = ocrFallbackEnabled
     ? new WindowsCaptureProvider({
         logLatestCapture: options.logLatestCapture ?? false,
@@ -333,6 +347,9 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
   let lastFinalizedShot: AcceptedFrame | undefined;
   let lastEmittedRangeRowId: number | undefined;
   let rangeDbUnavailableLogged = false;
+  let baselineRangeRowId: number | undefined;
+  let baselineEstablished = false;
+  let rangeDbOnlyStartedAtMs = Date.now();
   let lastRangeDbOnlyProblemKey: string | undefined;
   let ocrWindowSelected = false;
   let nextOcrFallbackAtMs = 0;
@@ -405,6 +422,12 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
     return shouldEmit;
   };
 
+  const emitSparseRangeDbOnlyStatus = (status: RangeDbOnlyStatus) => {
+    if (shouldEmitRangeDbOnlyProblem(status.status)) {
+      emitStructuredStatus(status);
+    }
+  };
+
   if (ocrFallbackEnabled) {
     emitStatus(
       `polling GSPro range DB first every ${rangeDbPollMs}ms; OCR fallback every ${ocrFallbackPollMs}ms when needed`,
@@ -428,15 +451,93 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
         try {
           const [latestRangeShot] = await readGsproRangeShots({ limit: 1 });
 
-          if (!latestRangeShot) {
+          if (!ocrFallbackEnabled) {
+            rangeDbUnavailableLogged = false;
+
+            if (!baselineEstablished) {
+              baselineEstablished = true;
+              rangeDbOnlyStartedAtMs = Date.now();
+              baselineRangeRowId = latestRangeShot?.rowId ?? 0;
+              lastEmittedRangeRowId = latestRangeShot?.rowId;
+
+              if (!latestRangeShot) {
+                emitSparseRangeDbOnlyStatus(rangeDbOnlyStatuses.noRangeShots);
+              } else {
+                emitStatus(
+                  `range DB baseline established at DrivingRangeShot row ${baselineRangeRowId}`,
+                );
+              }
+
+              await sleep(rangeDbPollMs);
+              continue;
+            }
+
+            if (!latestRangeShot) {
+              emitSparseRangeDbOnlyStatus(rangeDbOnlyStatuses.noRangeShots);
+              await sleep(rangeDbPollMs);
+              continue;
+            }
+
             if (
-              ocrFallbackEnabled ||
-              shouldEmitRangeDbOnlyProblem("empty-driving-range-shot")
+              baselineRangeRowId !== undefined &&
+              latestRangeShot.rowId <= baselineRangeRowId
             ) {
+              if (
+                Date.now() - rangeDbOnlyStartedAtMs >=
+                DEFAULT_FRESH_RANGE_SHOT_WAIT_MS
+              ) {
+                emitSparseRangeDbOnlyStatus(
+                  rangeDbOnlyStatuses.waitingForFreshRangeShot,
+                );
+              }
+
+              await sleep(rangeDbPollMs);
+              continue;
+            }
+
+            if (latestRangeShot.rowId === lastEmittedRangeRowId) {
+              if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+                emitStatus(
+                  `range DB heartbeat: waiting for new range DB shot after row ${latestRangeShot.rowId}`,
+                );
+              }
+              await sleep(rangeDbPollMs);
+              continue;
+            }
+
+            const shot = getAcceptedShot(latestRangeShot.frame);
+
+            if (!shot) {
+              emitSparseRangeDbOnlyStatus(rangeDbOnlyStatuses.missingRequiredFields);
+              await sleep(rangeDbPollMs);
+              continue;
+            }
+
+            lastRangeDbOnlyProblemKey = undefined;
+            finalizePendingShot();
+            shotSequence += 1;
+            const rangeDbTiming = buildRangeDbTiming(
+              latestRangeShot.rowId,
+              latestRangeShot.dateCreated,
+            );
+            const accepted = toAcceptedFrame(
+              latestRangeShot.frame,
+              shot,
+              `gspro-range-db:${latestRangeShot.rowId}`,
+              latestRangeShot.rowId,
+              rangeDbTiming,
+            );
+            options.onEvent(buildShotEvent("final-shot", accepted, shotSequence));
+            lastFinalizedShot = accepted;
+            lastEmittedRangeRowId = latestRangeShot.rowId;
+            await sleep(rangeDbPollMs);
+            continue;
+          }
+
+          if (!latestRangeShot) {
+            if (pollCount % HEARTBEAT_EVERY_POLLS === 0) {
               emitStatus(
-                ocrFallbackEnabled
-                  ? "range DB heartbeat: no DrivingRangeShot rows found; using OCR fallback"
-                  : "range DB heartbeat: no DrivingRangeShot rows found; waiting for range DB shot",
+                "range DB heartbeat: no DrivingRangeShot rows found; using OCR fallback",
               );
             }
           } else if (latestRangeShot.rowId === lastEmittedRangeRowId) {
@@ -449,30 +550,8 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
             continue;
           } else {
             const shot = getAcceptedShot(latestRangeShot.frame);
-            const ageMs = getRangeDbAgeMs(latestRangeShot.dateCreated);
 
             if (shot) {
-              if (
-                !ocrFallbackEnabled &&
-                ageMs !== undefined &&
-                ageMs > rangeDbOnlyStaleMs
-              ) {
-                if (
-                  shouldEmitRangeDbOnlyProblem(
-                    `stale-driving-range-shot:${latestRangeShot.rowId}`,
-                  )
-                ) {
-                  emitError(
-                    `range DB stale: latest DrivingRangeShot row ${latestRangeShot.rowId} is ${formatAgeMs(
-                      ageMs,
-                    )} old; waiting for a fresh row`,
-                  );
-                }
-                await sleep(rangeDbPollMs);
-                continue;
-              }
-
-              lastRangeDbOnlyProblemKey = undefined;
               finalizePendingShot();
               shotSequence += 1;
               const rangeDbTiming = buildRangeDbTiming(
@@ -493,28 +572,21 @@ export const runSimReadLive = async (options: RunSimReadLiveOptions) => {
               continue;
             }
 
-            if (ocrFallbackEnabled) {
-              emitStatus(
-                `range DB row ${latestRangeShot.rowId} missing required fields; using OCR fallback`,
-              );
-            } else if (
-              shouldEmitRangeDbOnlyProblem(
-                `missing-required-fields:${latestRangeShot.rowId}`,
-              )
-            ) {
-              emitError(
-                `range DB row ${latestRangeShot.rowId} missing required fields: carry, totalDistance, and offline are required`,
-              );
-            }
+            emitStatus(
+              `range DB row ${latestRangeShot.rowId} missing required fields; using OCR fallback`,
+            );
           }
 
           rangeDbUnavailableLogged = false;
         } catch (error) {
-          if (!rangeDbUnavailableLogged || pollCount % HEARTBEAT_EVERY_POLLS === 0) {
+          if (!ocrFallbackEnabled) {
+            emitSparseRangeDbOnlyStatus(rangeDbOnlyStatuses.rangeDbUnavailable);
+          } else if (
+            !rangeDbUnavailableLogged ||
+            pollCount % HEARTBEAT_EVERY_POLLS === 0
+          ) {
             emitError(
-              ocrFallbackEnabled
-                ? `range DB unavailable; using OCR fallback: ${getErrorMessage(error)}`
-                : `range DB unavailable: ${getErrorMessage(error)}`,
+              `range DB unavailable; using OCR fallback: ${getErrorMessage(error)}`,
             );
           }
           rangeDbUnavailableLogged = true;
