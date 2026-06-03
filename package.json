@@ -3,12 +3,19 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "simread": "dist/simread/cli.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "build:simread-helper": "tsc -p tsconfig.simread-helper.json",
+    "bundle:simread-helper": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-simread-helper.ps1",
     "dev": "ts-node src/index.ts",
     "simread:demo": "ts-node src/simread/demo.ts",
     "simread:live": "ts-node src/simread/liveDemo.ts",
     "simread:serve": "ts-node src/simread/server.ts",
+    "simread:helper:serve": "node dist/simread/cli.js serve",
+    "simread:helper:live": "node dist/simread/cli.js live",
     "simread:windows": "ts-node src/simread/windowsDemo.ts",
     "simread:ocr": "ts-node src/extraction/gspro/readGsproCapture.ts",
     "simread:range-db": "ts-node src/extraction/gspro/files/readGsproRangeShots.ts",
