@@ -8,6 +8,8 @@ The current Looper beta uses SimRead in **range DB only** mode, reading GSPro's 
 
 SimRead is an early-stage project and the interfaces may still change. The range DB workflow is the path currently used by Looper.
 
+**Project status:** SimRead is published for use and reference, but this repository is not currently accepting external contributions or pull requests.
+
 ## Requirements
 
 - Windows
