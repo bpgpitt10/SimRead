@@ -5,6 +5,14 @@ import { isOcrFallbackEnabled, resolveSimReadMode } from "./mode";
 const DEFAULT_PORT = 8788;
 const HOST = "127.0.0.1";
 
+const BROWSER_ACCESS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Private-Network": "true",
+  "Access-Control-Max-Age": "86400",
+};
+
 const parsePort = () => {
   const rawPort = process.env.SIMREAD_PORT;
   if (rawPort === undefined) {
@@ -28,6 +36,7 @@ let liveLoopStarted = false;
 
 const writeJson = (response: ServerResponse, statusCode: number, body: unknown) => {
   response.writeHead(statusCode, {
+    ...BROWSER_ACCESS_HEADERS,
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
   });
@@ -67,6 +76,7 @@ const startLiveLoop = () => {
 
 const handleEvents = (response: ServerResponse) => {
   response.writeHead(200, {
+    ...BROWSER_ACCESS_HEADERS,
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive",
@@ -88,6 +98,12 @@ const handleEvents = (response: ServerResponse) => {
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://${HOST}`);
+
+  if (request.method === "OPTIONS") {
+    response.writeHead(204, BROWSER_ACCESS_HEADERS);
+    response.end();
+    return;
+  }
 
   if (request.method === "GET" && url.pathname === "/health") {
     const mode = resolveSimReadMode();
