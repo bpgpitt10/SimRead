@@ -1,0 +1,51 @@
+name: Build SimRead Windows Helper
+
+on:
+  push:
+    branches:
+      - simread-runtime-shell
+  workflow_dispatch:
+
+jobs:
+  build-windows-helper:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build helper bundle
+        shell: powershell
+        run: npm run bundle:simread-helper
+
+      - name: Add one-click launcher
+        shell: powershell
+        run: |
+          @'
+          @echo off
+          cd /d "%~dp0"
+          title SimRead - GSPro bridge for Looper
+          echo Starting SimRead for Looper...
+          echo Keep this window open while using Looper.
+          echo.
+          call simread.cmd serve
+          echo.
+          echo SimRead stopped. Press any key to close.
+          pause >nul
+          '@ | Set-Content -LiteralPath "artifacts\simread-helper\Start SimRead.cmd" -Encoding ASCII
+
+      - name: Upload Windows helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimRead-Windows-Helper
+          path: artifacts/simread-helper
+          if-no-files-found: error
+          retention-days: 30
