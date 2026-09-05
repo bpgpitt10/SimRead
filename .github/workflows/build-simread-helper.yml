@@ -32,8 +32,10 @@ jobs:
           @'
           @echo off
           cd /d "%~dp0"
-          title SimRead - GSPro bridge for Looper
+          title SimRead - GSPro range bridge for Looper
+          set SIMREAD_SOURCE=range-db-only
           echo Starting SimRead for Looper...
+          echo Mode: GSPro Practice Range database only
           echo Keep this window open while using Looper.
           echo.
           call simread.cmd serve
