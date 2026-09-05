@@ -26,7 +26,7 @@ jobs:
         shell: powershell
         run: npm run bundle:simread-helper
 
-      - name: Add one-click launcher
+      - name: Add Windows launchers and installer
         shell: powershell
         run: |
           @'
@@ -43,6 +43,76 @@ jobs:
           echo SimRead stopped. Press any key to close.
           pause >nul
           '@ | Set-Content -LiteralPath "artifacts\simread-helper\Start SimRead.cmd" -Encoding ASCII
+
+          @'
+          @echo off
+          cd /d "%~dp0"
+          set SIMREAD_SOURCE=range-db-only
+          if not exist "%LOCALAPPDATA%\Looper\SimRead" mkdir "%LOCALAPPDATA%\Looper\SimRead" >nul 2>&1
+          call simread.cmd serve >> "%LOCALAPPDATA%\Looper\SimRead\simread.log" 2>&1
+          '@ | Set-Content -LiteralPath "artifacts\simread-helper\Start SimRead Background.cmd" -Encoding ASCII
+
+          @'
+          Set shell = CreateObject("WScript.Shell")
+          Set fso = CreateObject("Scripting.FileSystemObject")
+          folder = fso.GetParentFolderName(WScript.ScriptFullName)
+          command = "cmd.exe /c """ & folder & "\Start SimRead Background.cmd"""
+          shell.Run command, 0, False
+          '@ | Set-Content -LiteralPath "artifacts\simread-helper\Start SimRead Background.vbs" -Encoding ASCII
+
+          @'
+          @echo off
+          setlocal
+          set "SOURCE_DIR=%~dp0"
+          set "INSTALL_DIR=%LOCALAPPDATA%\Looper\SimRead"
+          set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+          set "SHORTCUT=%STARTUP_DIR%\Looper SimRead.lnk"
+
+          echo Installing SimRead for Looper...
+          if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
+          robocopy "%SOURCE_DIR%" "%INSTALL_DIR%" /E /NFL /NDL /NJH /NJS /NP >nul
+          if errorlevel 8 (
+            echo.
+            echo SimRead install failed while copying files.
+            pause
+            exit /b 1
+          )
+
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '""%INSTALL_DIR%\Start SimRead Background.vbs""'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.Description = 'Start SimRead GSPro bridge for Looper'; $s.Save()"
+          if errorlevel 1 (
+            echo.
+            echo SimRead installed, but Windows startup registration failed.
+            echo You can still run Start SimRead.cmd manually from:
+            echo %INSTALL_DIR%
+            pause
+            exit /b 1
+          )
+
+          start "" wscript.exe "%INSTALL_DIR%\Start SimRead Background.vbs"
+          timeout /t 2 /nobreak >nul
+          start "" "http://127.0.0.1:8788/health"
+
+          echo.
+          echo SimRead is installed.
+          echo It will start silently when you sign in to Windows.
+          echo Health check opened in your browser.
+          echo Installed at: %INSTALL_DIR%
+          echo.
+          pause
+          '@ | Set-Content -LiteralPath "artifacts\simread-helper\Install SimRead for Looper.cmd" -Encoding ASCII
+
+          @'
+          @echo off
+          setlocal
+          set "INSTALL_DIR=%LOCALAPPDATA%\Looper\SimRead"
+          set "SHORTCUT=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Looper SimRead.lnk"
+          if exist "%SHORTCUT%" del /q "%SHORTCUT%"
+          echo SimRead startup entry removed.
+          echo The installed files remain at:
+          echo %INSTALL_DIR%
+          echo You can delete that folder after SimRead is no longer running.
+          pause
+          '@ | Set-Content -LiteralPath "artifacts\simread-helper\Disable SimRead Auto-Start.cmd" -Encoding ASCII
 
       - name: Upload Windows helper
         uses: actions/upload-artifact@v4
