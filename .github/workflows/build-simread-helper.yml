@@ -81,15 +81,14 @@ jobs:
           @'
           @echo off
           setlocal
-          set "SOURCE_DIR=%~dp0"
-          set "INSTALL_DIR=%LOCALAPPDATA%\Looper\SimRead"
+          set "SIMREAD_SOURCE_DIR=%~dp0"
+          set "SIMREAD_INSTALL_DIR=%LOCALAPPDATA%\Looper\SimRead"
           set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
           set "SHORTCUT=%STARTUP_DIR%\Looper SimRead.lnk"
 
           echo Installing SimRead for Looper...
-          if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-          robocopy "%SOURCE_DIR%" "%INSTALL_DIR%" /E /NFL /NDL /NJH /NJS /NP >nul
-          if errorlevel 8 (
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force -Path $env:SIMREAD_INSTALL_DIR | Out-Null; Copy-Item -Path (Join-Path $env:SIMREAD_SOURCE_DIR '*') -Destination $env:SIMREAD_INSTALL_DIR -Recurse -Force"
+          if errorlevel 1 (
             echo.
             echo SimRead install failed while copying files.
             if "%SIMREAD_INSTALL_TEST%"=="1" exit /b 1
@@ -97,26 +96,26 @@ jobs:
             exit /b 1
           )
 
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = [char]34 + '%INSTALL_DIR%\Start SimRead Background.vbs' + [char]34; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.Description = 'Start SimRead GSPro bridge for Looper'; $s.Save()"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = [char]34 + $env:SIMREAD_INSTALL_DIR + '\Start SimRead Background.vbs' + [char]34; $s.WorkingDirectory = $env:SIMREAD_INSTALL_DIR; $s.Description = 'Start SimRead GSPro bridge for Looper'; $s.Save()"
           if errorlevel 1 (
             echo.
             echo SimRead installed, but Windows startup registration failed.
             echo You can still run Start SimRead.cmd manually from:
-            echo %INSTALL_DIR%
+            echo %SIMREAD_INSTALL_DIR%
             if "%SIMREAD_INSTALL_TEST%"=="1" exit /b 1
             pause
             exit /b 1
           )
 
           if "%SIMREAD_INSTALL_TEST%"=="1" (
-            if not exist "%INSTALL_DIR%\node.exe" exit /b 1
-            if not exist "%INSTALL_DIR%\dist\simread\cli.js" exit /b 1
+            if not exist "%SIMREAD_INSTALL_DIR%\node.exe" exit /b 1
+            if not exist "%SIMREAD_INSTALL_DIR%\dist\simread\cli.js" exit /b 1
             if not exist "%SHORTCUT%" exit /b 1
             echo SimRead installer smoke test passed.
             exit /b 0
           )
 
-          start "" wscript.exe "%INSTALL_DIR%\Start SimRead Background.vbs"
+          start "" wscript.exe "%SIMREAD_INSTALL_DIR%\Start SimRead Background.vbs"
           timeout /t 2 /nobreak >nul
           start "" "http://127.0.0.1:8788/health"
 
@@ -124,7 +123,7 @@ jobs:
           echo SimRead is installed.
           echo It will start silently when you sign in to Windows.
           echo Health check opened in your browser.
-          echo Installed at: %INSTALL_DIR%
+          echo Installed at: %SIMREAD_INSTALL_DIR%
           echo.
           pause
           '@ | Set-Content -LiteralPath "artifacts\simread-helper\Install SimRead for Looper.cmd" -Encoding ASCII
