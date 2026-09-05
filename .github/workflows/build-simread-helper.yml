@@ -92,6 +92,7 @@ jobs:
           if errorlevel 8 (
             echo.
             echo SimRead install failed while copying files.
+            if "%SIMREAD_INSTALL_TEST%"=="1" exit /b 1
             pause
             exit /b 1
           )
@@ -102,8 +103,17 @@ jobs:
             echo SimRead installed, but Windows startup registration failed.
             echo You can still run Start SimRead.cmd manually from:
             echo %INSTALL_DIR%
+            if "%SIMREAD_INSTALL_TEST%"=="1" exit /b 1
             pause
             exit /b 1
+          )
+
+          if "%SIMREAD_INSTALL_TEST%"=="1" (
+            if not exist "%INSTALL_DIR%\node.exe" exit /b 1
+            if not exist "%INSTALL_DIR%\dist\simread\cli.js" exit /b 1
+            if not exist "%SHORTCUT%" exit /b 1
+            echo SimRead installer smoke test passed.
+            exit /b 0
           )
 
           start "" wscript.exe "%INSTALL_DIR%\Start SimRead Background.vbs"
@@ -131,6 +141,12 @@ jobs:
           echo You can delete that folder after SimRead is no longer running.
           pause
           '@ | Set-Content -LiteralPath "artifacts\simread-helper\Disable SimRead Auto-Start.cmd" -Encoding ASCII
+
+      - name: Smoke-test Windows installer
+        shell: cmd
+        run: |
+          set SIMREAD_INSTALL_TEST=1
+          call "artifacts\simread-helper\Install SimRead for Looper.cmd"
 
       - name: Upload Windows helper
         uses: actions/upload-artifact@v4
