@@ -29,6 +29,19 @@ jobs:
       - name: Add Windows launchers and installer
         shell: powershell
         run: |
+          $nodePath = (Get-Command node).Source
+          Copy-Item -LiteralPath $nodePath -Destination "artifacts\simread-helper\node.exe" -Force
+
+          @'
+          @echo off
+          setlocal
+          if exist "%~dp0node.exe" (
+            "%~dp0node.exe" "%~dp0dist\simread\cli.js" %*
+          ) else (
+            node "%~dp0dist\simread\cli.js" %*
+          )
+          '@ | Set-Content -LiteralPath "artifacts\simread-helper\simread.cmd" -Encoding ASCII
+
           @'
           @echo off
           cd /d "%~dp0"
