@@ -48,8 +48,13 @@ jobs:
           @echo off
           cd /d "%~dp0"
           set SIMREAD_SOURCE=range-db-only
+          set "LOG=%LOCALAPPDATA%\Looper\SimRead\simread.log"
           if not exist "%LOCALAPPDATA%\Looper\SimRead" mkdir "%LOCALAPPDATA%\Looper\SimRead" >nul 2>&1
-          call simread.cmd serve >> "%LOCALAPPDATA%\Looper\SimRead\simread.log" 2>&1
+          if exist "%LOG%" for %%A in ("%LOG%") do if %%~zA GTR 5242880 del /q "%LOG%"
+          :restart
+          call simread.cmd serve >> "%LOG%" 2>&1
+          timeout /t 5 /nobreak >nul
+          goto restart
           '@ | Set-Content -LiteralPath "artifacts\simread-helper\Start SimRead Background.cmd" -Encoding ASCII
 
           @'
@@ -78,7 +83,7 @@ jobs:
             exit /b 1
           )
 
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '""%INSTALL_DIR%\Start SimRead Background.vbs""'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.Description = 'Start SimRead GSPro bridge for Looper'; $s.Save()"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '"%INSTALL_DIR%\Start SimRead Background.vbs"'; $s.WorkingDirectory = '%INSTALL_DIR%'; $s.Description = 'Start SimRead GSPro bridge for Looper'; $s.Save()"
           if errorlevel 1 (
             echo.
             echo SimRead installed, but Windows startup registration failed.
